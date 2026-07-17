@@ -132,7 +132,8 @@ void ml4fpga::gem::GemReconDqmProcessor::Process(const std::shared_ptr<const JEv
         if (std::string(exp.what()).find(no_factory_message) != std::string::npos) {
             // The first events might be some technical data and maybe DGEMSRSWindowRawData is not yet there so
             // we skip this. For later events we make it a warning
-            std::string log_message = fmt::format(no_factory_message + " at event={} total_event_num=", event->GetEventNumber(), m_total_event_num);
+            std::string log_message = fmt::format("{} at event={} total_event_num={}",
+                                                  no_factory_message, event->GetEventNumber(), m_total_event_num);
             if(event->GetEventNumber() < 10) {
                 m_log->debug(log_message);
             } else {

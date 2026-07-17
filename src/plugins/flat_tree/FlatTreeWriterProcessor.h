@@ -23,9 +23,6 @@
 #include "SrsPreReconRecord.h"
 #include "GemPlanePeak.h"
 #include <plugins/gemrecon/PlanePeak.h>
-#include <Vc/Memory>
-#include <Vc/Memory>
-#include <Vc/Memory>
 
 #include "FpgaF125Cluster.h"
 #include "FpgaHitToTrack.h"

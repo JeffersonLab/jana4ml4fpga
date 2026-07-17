@@ -1,11 +1,22 @@
 #include <sstream>
 #include <thread>
 #include <mutex>
+#include <atomic>
 
 #include <rawdataparser/EVIOBlockedEventParser.h>
 #include <rawdataparser/EVIOFileWriter.h>
 
 using namespace std;
+
+namespace {
+// Data format errors can repeat on every event of a bad file. Limit how many
+// times a given warning is printed so logs stay usable.
+bool ShouldWarn(std::atomic<int> &counter, int limit = 20) {
+    int n = ++counter;
+    if (n == limit) jerr << "(Further warnings of this type will be suppressed)" << endl;
+    return n <= limit;
+}
+} // anonymous namespace
 
 // The EBEP namespace is used for things related to the optional output EVIO file.
 namespace EBEP {
@@ -612,16 +623,26 @@ void EVIOBlockedEventParser::ParseDataBank(uint32_t *&iptr, uint32_t *iend) {
                 ParseDGEMSRSBank(rocid, iptr, iend_data_block_bank);
                 break;
 
-            default:
-                _DBG_ << "Unknown module type (" << det_id << " = 0x" << std::hex << det_id << std::dec
-                      << " ) encountered" << std::endl;
-//				if(VERBOSE>5){
-                std::cout << "----- First few words to help with debugging -----" << std::endl;
-                std::cout.flush();
-                std::cerr.flush();
-                DumpBinary(&iptr[-2], iend, 32, &iptr[-1]);
-//				}
-                throw JException("Unknown bank type in EVIO");
+            case 0xDEC:
+                // JLab helicity decoder board (parsed in halld_recon since 2025). Not used here - skip.
+                if (m_config.VERBOSE > 3) _DBG_ << " -- Helicity Decoder (skipping)  rocid=" << rocid << std::endl;
+                break;
+
+            default: {
+                // Unknown banks (e.g. from a new detector or a format change) are skipped
+                // instead of aborting the whole job (same behavior as halld_recon ParseUnknownBank).
+                static std::atomic<int> warn_count{0};
+                if (ShouldWarn(warn_count)) {
+                    jerr << "Unknown module type (" << det_id << " = 0x" << std::hex << det_id << std::dec
+                         << " ) encountered. Skipping bank." << std::endl;
+                    if (m_config.VERBOSE > 5) {
+                        std::cout << "----- First few words to help with debugging -----" << std::endl;
+                        std::cout.flush();
+                        std::cerr.flush();
+                        DumpBinary(&iptr[-2], iend, 32, &iptr[-1]);
+                    }
+                }
+            }
 
         }
 
@@ -999,7 +1020,18 @@ void EVIOBlockedEventParser::ParseDGEMSRSBank(uint32_t rocid, uint32_t *&iptr, u
 
     vector<int> rawData16bits;
 
+    if (ievent >= events.size()) {
+        // No event to write to. Should not happen, but don't index past events[].
+        iptr = iend;
+        return;
+    }
+
     iptr++; //skip first word? (no idata=0) used in GEMRawDecoder::Decode
+    if (iptr >= iend) {
+        // Empty/truncated bank
+        iptr = iend;
+        return;
+    }
 
     // This is very confusing, but based on the original code, it looks like
     // The way multiple events are identified is by having 2 magic
@@ -1024,12 +1056,22 @@ void EVIOBlockedEventParser::ParseDGEMSRSBank(uint32_t rocid, uint32_t *&iptr, u
             } else { // for first APV in event initialize DParsedEvent
                 // pe = *pe_iter++;
                 if (last_word_was_magic_header) ievent++;
+                if (ievent >= events.size()) {
+                    static std::atomic<int> warn_count{0};
+                    if (ShouldWarn(warn_count)) {
+                        jerr << "ParseDGEMSRSBank: more SRS event boundaries than events in block."
+                             << " Skipping rest of bank." << std::endl;
+                    }
+                    iptr = iend;
+                    return;
+                }
             }
 
             // initial word is "Data Header"
             last_word_was_magic_header = true;
             apv_id = (*iptr) & 0xff; // equivalent to nadcCh in GEMRawDecoder::Decode
             iptr++; // next word is "Header Info" (reserved)
+            if (iptr >= iend) break; // truncated bank: data header without info word
             fec_id = (*iptr >> 16) & 0xff; // equivalent to nfecID in GEMRawDecoder::Decode
 
             if (m_config.VERBOSE > 7)
@@ -1100,9 +1142,9 @@ void EVIOBlockedEventParser::MakeDGEMSRSWindowRawData(JEvent *event, uint32_t ro
     for (idata = 0; idata < size; idata++) {
         if (rawData16bits[idata] < fAPVHeaderLevel) {
             idata++;
-            if (rawData16bits[idata] < fAPVHeaderLevel) {
+            if (idata < size && rawData16bits[idata] < fAPVHeaderLevel) {
                 idata++;
-                if (rawData16bits[idata] < fAPVHeaderLevel) {
+                if (idata < size && rawData16bits[idata] < fAPVHeaderLevel) {
                     idata += 10;
                     fStartData = idata;
                     idata = size;
@@ -1124,9 +1166,20 @@ void EVIOBlockedEventParser::MakeDGEMSRSWindowRawData(JEvent *event, uint32_t ro
     //for(int i=0; i<NCH; i++) windowDataAPV[i].resize(fNbOfTimeSamples);
 
     for (int32_t timebin = 0; timebin < fNbOfTimeSamples; timebin++) {
+        // Frames from unexpected/changed data formats can be shorter than
+        // fStartData + Nsamples*(NCH+12) words. Never read past the end of the frame.
+        if (lastdata > size) {
+            static std::atomic<int> warn_count{0};
+            if (ShouldWarn(warn_count)) {
+                jerr << "MakeDGEMSRSWindowRawData: APV frame too short (apv_id=" << apv_id
+                     << ", " << size << " words, time bin " << timebin << " needs " << lastdata
+                     << "). Skipping rest of frame." << std::endl;
+            }
+            break;
+        }
+
         // EXTRACT APV25 DATA FOR A GIVEN TIME BIN
         rawDataTS.insert(rawDataTS.end(), &rawData16bits[firstdata], &rawData16bits[lastdata]);
-        assert(rawDataTS.size() == 128);
         for (int32_t chNo = 0; chNo < NCH; chNo++) {
             //windowDataAPV[chNo].at(timebin) = rawDataTS[chNo];
             windowDataAPV[chNo].push_back(rawDataTS[chNo]);
@@ -1135,9 +1188,6 @@ void EVIOBlockedEventParser::MakeDGEMSRSWindowRawData(JEvent *event, uint32_t ro
         firstdata = lastdata + 12;
         lastdata = firstdata + NCH;
         rawDataTS.clear();
-
-        // if next time sample beyond last word, break from loop
-        if (lastdata > size) break;
     }
 
     // write sample data to GEMSRS object
@@ -1196,6 +1246,12 @@ void EVIOBlockedEventParser::Parsef250Bank(uint32_t rocid, uint32_t *&iptr, uint
                 break;
             case 2: // Event Header
                 itrigger = (*iptr >> 0) & 0x3FFFFF;
+                if (ievent >= events.size()) {
+                    jerr << "FADC250: more event headers than events in block! rocid=" << rocid
+                         << " slot=" << slot << ". Skipping rest of bank." << endl;
+                    iptr = iend;
+                    return;
+                }
                 event = events[ievent++].get();
                 // pe = *pe_iter++;
                 if (m_config.VERBOSE > 7)
@@ -1225,7 +1281,7 @@ void EVIOBlockedEventParser::Parsef250Bank(uint32_t rocid, uint32_t *&iptr, uint
             case 4: // Window Raw Data
                 // iptr passed by reference and so will be updated automatically
                 // cout << "      FADC250 Window Raw Data"<<" (0x"<<hex<<*iptr<<dec<<")"<<endl;
-                if (event) MakeDf250WindowRawData(event, rocid, slot, itrigger, iptr);
+                if (event) MakeDf250WindowRawData(event, rocid, slot, itrigger, iptr, iend);
                 break;
             case 5: // Window Sum
             {
@@ -1433,7 +1489,7 @@ void EVIOBlockedEventParser::Parsef250Bank(uint32_t rocid, uint32_t *&iptr, uint
 // MakeDf250WindowRawData
 //----------------
 void EVIOBlockedEventParser::MakeDf250WindowRawData(JEvent *event, uint32_t rocid, uint32_t slot, uint32_t itrigger,
-                                                    uint32_t *&iptr) {
+                                                    uint32_t *&iptr, uint32_t *iend) {
     uint32_t channel = (*iptr >> 23) & 0x0F;
     uint32_t window_width = (*iptr >> 0) & 0x0FFF;
 
@@ -1444,6 +1500,15 @@ void EVIOBlockedEventParser::MakeDf250WindowRawData(JEvent *event, uint32_t roci
 
         // Advance to next word
         iptr++;
+
+        // Truncated data: block ends before all advertised samples (halld_recon fix ff374582)
+        if (iptr >= iend) {
+            static std::atomic<int> warn_count{0};
+            if (ShouldWarn(warn_count))
+                jerr << "fa250 window raw data are incomplete - the collection of samples has been truncated!" << endl;
+            iptr--; // calling method expects us to point to last word in block
+            break;
+        }
 
         // Make sure this is a data continuation word, if not, stop here
         if (((*iptr >> 31) & 0x1) != 0x0) {
@@ -1525,6 +1590,12 @@ void EVIOBlockedEventParser::Parsef125Bank(uint32_t rocid, uint32_t *&iptr, uint
             case 2: // Event Header
                 //slot_event_header = (*iptr>>22) & 0x1F;
                 itrigger = (*iptr >> 0) & 0x3FFFFFF;
+                if (ievent >= events.size()) {
+                    jerr << "FADC125: more event headers than events in block! rocid=" << rocid
+                         << " slot=" << slot << ". Skipping rest of bank." << endl;
+                    iptr = iend;
+                    return;
+                }
                 event = events[ievent++].get();
                 // pe = *pe_iter++;
                 if (m_config.VERBOSE > 7)
@@ -1548,7 +1619,7 @@ void EVIOBlockedEventParser::Parsef125Bank(uint32_t rocid, uint32_t *&iptr, uint
             case 4: // Window Raw Data
                 // iptr passed by reference and so will be updated automatically
                 // cout << "      FADC125 Window Raw Data"<<endl;
-                if (event) MakeDf125WindowRawData(event, rocid, slot, itrigger, iptr);
+                if (event) MakeDf125WindowRawData(event, rocid, slot, itrigger, iptr, iend);
                 break;
 
             case 5: // CDC pulse data (new)  (GlueX-doc-2274-v8)
@@ -1828,7 +1899,7 @@ void EVIOBlockedEventParser::Parsef125Bank(uint32_t rocid, uint32_t *&iptr, uint
 // MakeDf125WindowRawData
 //----------------
 void EVIOBlockedEventParser::MakeDf125WindowRawData(JEvent *event, uint32_t rocid, uint32_t slot, uint32_t itrigger,
-                                                    uint32_t *&iptr) {
+                                                    uint32_t *&iptr, uint32_t *iend) {
     uint32_t channel = (*iptr >> 20) & 0x7F;
     uint32_t window_width = (*iptr >> 0) & 0x0FFF;
 
@@ -1839,6 +1910,15 @@ void EVIOBlockedEventParser::MakeDf125WindowRawData(JEvent *event, uint32_t roci
 
         // Advance to next word
         iptr++;
+
+        // Truncated data: block ends before all advertised samples (halld_recon fix ff374582)
+        if (iptr >= iend) {
+            static std::atomic<int> warn_count{0};
+            if (ShouldWarn(warn_count))
+                jerr << "fa125 window raw data are incomplete - the collection of samples has been truncated!" << endl;
+            iptr--;
+            break;
+        }
 
         // Make sure this is a data continuation word, if not, stop here
         if (((*iptr >> 31) & 0x1) != 0x0)break;

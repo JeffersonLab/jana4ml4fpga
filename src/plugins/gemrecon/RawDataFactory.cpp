@@ -7,6 +7,7 @@
 #include "GemMapping.h"
 #include "libraries/rawdataparser/DGEMSRSWindowRawData.h"
 #include <JANA/JEvent.h>
+#include <algorithm>
 
 #include "GemMappingService.h"
 
@@ -64,8 +65,12 @@ namespace ml4fpga {
                 auto apv_id = apv_pair.first;
                 auto time_samples = apv_pair.second;
 
-                // Crate histogram
-                const size_t samples_size = time_samples[0].size();
+                // Number of time samples. Channels can be absent or have fewer samples in
+                // malformed events, so take the maximum over channels instead of channel 0
+                size_t samples_size = 0;
+                for (auto& time_samples_pair: time_samples) {
+                    samples_size = std::max(samples_size, time_samples_pair.second.size());
+                }
                 const size_t raw_data_len = samples_size * 128;
                 std::vector<double> all_samples(raw_data_len, 0);
 
@@ -76,8 +81,10 @@ namespace ml4fpga {
                     auto samples = time_samples_pair.second;
                     // go over samples
                     for (size_t sample_i = 0; sample_i < samples.size(); sample_i++) {
-                        int data_index = sample_i * 128 + timebin;  // + sample_i to make gaps in between samples
-                        all_samples[data_index] = samples[sample_i];
+                        size_t data_index = sample_i * 128 + timebin;  // + sample_i to make gaps in between samples
+                        if (data_index < all_samples.size()) {
+                            all_samples[data_index] = samples[sample_i];
+                        }
                     }
                 }
                 apv_data.all_samples = all_samples;

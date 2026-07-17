@@ -14,8 +14,20 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_BUILD_TYPE Debug)
 
 # Find packages
-find_package(JANA REQUIRED)
+# ROOT must be pre-installed (system package, conda or thisroot.sh)
+
+include(cmake/vdt_stub.cmake)      # Stub for ROOT installations built with vdt when vdt is absent
+
 find_package(ROOT REQUIRED)
+
+# Fetch and build missing small dependencies (JANA2, spdlog, fmt) at configure time.
+# Does nothing for dependencies that are already installed.
+option(FETCH_DEPENDENCIES "Download and build missing dependencies (JANA2, spdlog, fmt) with FetchContent" ON)
+if(FETCH_DEPENDENCIES)
+    include(cmake/fetch_dependencies.cmake)
+endif()
+
+find_package(JANA REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(fmt REQUIRED)
 

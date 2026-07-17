@@ -49,12 +49,20 @@ namespace ml4fpga::gem {
         merged.apv_ids = first.apv_ids;
         merged.apv_ids.insert(merged.apv_ids.end(), second.apv_ids.begin(), second.apv_ids.end());
 
+        // `second` can have more time-bin rows than `first` (missing APV in the event,
+        // truncated frame, etc.). Grow the destination instead of writing past its end.
         merged.raw_data = first.raw_data;
+        if (second.raw_data.size() > merged.raw_data.size()) {
+            merged.raw_data.resize(second.raw_data.size());
+        }
         for(size_t i = 0; i < second.raw_data.size(); ++i) {
             merged.raw_data[i].insert(merged.raw_data[i].end(), second.raw_data[i].begin(), second.raw_data[i].end());
         }
 
         merged.data = first.data;
+        if (second.data.size() > merged.data.size()) {
+            merged.data.resize(second.data.size());
+        }
         for(size_t i = 0; i < second.data.size(); ++i) {
             merged.data[i].insert(merged.data[i].end(), second.data[i].begin(), second.data[i].end());
         }

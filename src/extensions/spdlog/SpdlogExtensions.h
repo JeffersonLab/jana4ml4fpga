@@ -52,7 +52,8 @@ namespace spdlog::extensions {
                 break;
         }
 
-        auto err_msg = fmt::format("ParseLogLevel don't know this log level: '{}'", input);
+        // (cast to int: fmt >= 9 does not format enums implicitly)
+        auto err_msg = fmt::format("ParseLogLevel don't know this log level: '{}'", static_cast<int>(input));
         throw JException(err_msg);
     }
 }
