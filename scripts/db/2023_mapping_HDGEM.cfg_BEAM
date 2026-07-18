@@ -1,9 +1,3 @@
-# readout types:
-# CARTESIAN planeX sizeX nbOfConnectorsX orientationX <same for Y > Y
-# 1DSTRIPS plane size nbOfConnectors orientation
-# UV_ANGLE length outerRadius innerRadius planeTop nbOfConnectorsTop orientationTop <same for Bot>
-# PADPLANE padPlane padSizeX nbPadX padSizeY nbPadY nbConnectors
-# CMSGEM etaSector etaSectorPos etaSectorSize nbConnectors orientation
 #################################################################################################
      readoutType    DetType    DetName     Plane   size (mm)  connectors  orientation
 #################################################################################################
