@@ -62,6 +62,11 @@ void ml4fpga::gem::GemReconDqmProcessor::Init() {
     m_mapping = app->GetService<GemMappingService>()->GetMapping();
     m_apv_id_names_map = m_mapping->GetAPVFromIDMap();
 
+    // Plane names to monitor. Same parameter keys as ClusterFactory so one
+    // -Pgemrecon:plane_name_x/_y configures the whole plugin consistently.
+    app->SetDefaultParameter("gemrecon:plane_name_x", m_name_plane_x, "X Plane name (like URWELLX)");
+    app->SetDefaultParameter("gemrecon:plane_name_y", m_name_plane_y, "Y Plane name (like URWELLY)");
+
     // Create histograms
     int nbins = 2 * Constants::ChannelsCount;
     double plane_size_x = m_mapping->GetPlaneSize(m_name_plane_x);
@@ -580,6 +585,12 @@ void ml4fpga::gem::GemReconDqmProcessor::FillEventPeaks(const std::shared_ptr<co
 void ml4fpga::gem::GemReconDqmProcessor::FillIntegralPeaks(const std::shared_ptr<const JEvent> &event)
 {
     auto pf_result = event->GetSingle<PlanePeakFindingResult>();
+    // Peak finding result or the configured planes may be absent - nothing to fill
+    if (pf_result == nullptr
+        || !pf_result->peaks_by_plane.count(m_name_plane_x)
+        || !pf_result->peaks_by_plane.count(m_name_plane_y)) {
+        return;
+    }
     const auto& x_peaks = pf_result->peaks_by_plane.at(m_name_plane_x);
     const auto& y_peaks = pf_result->peaks_by_plane.at(m_name_plane_y);
 

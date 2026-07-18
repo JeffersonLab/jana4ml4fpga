@@ -5,6 +5,7 @@
 #include <iostream>
 
 #include <TFile.h>
+#include <TROOT.h>
 
 #include "JANA4ML4FPGA_CLI.h"
 
@@ -17,6 +18,10 @@ std::vector<std::string> JANA4ML4FPGA_DEFAULT_PLUGINS = {
 };
 
 int main( int narg, char *argv[]) {
+
+    // Make ROOT thread-safe before anything touches ROOT objects (MT plan step 0d).
+    // Required for multithreaded ROOT I/O (TBufferMerger etc.); harmless single-threaded.
+    ROOT::EnableThreadSafety();
 
     std::vector<std::string> default_plugins = JANA4ML4FPGA_DEFAULT_PLUGINS;
 

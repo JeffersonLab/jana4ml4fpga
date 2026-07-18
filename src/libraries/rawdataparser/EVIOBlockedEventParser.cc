@@ -145,8 +145,13 @@ EVIOBlockedEventParser::ParseEVIOBlockedEvent(EVIOBlockedEvent &block, JEventPoo
         // Allocate M JEvents from the pool
         for (uint32_t i = 0; i < M; i++) {
             auto event = pool->get(0);
-            // event->SetEventNumber()
-            // event->SetEventNumber()
+            if (event == nullptr) {
+                // JEventPool::get returns nullptr when jana:limit_total_events_in_flight
+                // is enabled and the pool is exhausted. Fail loudly instead of segfaulting.
+                throw JException("EVIOBlockedEventParser: JEvent pool exhausted. "
+                                 "Run with -Pjana:limit_total_events_in_flight=0 "
+                                 "when using a blocked (parallel-parse) event source.");
+            }
             event->SetEventNumber(event_num + i); // should be 0 for BOR and EPICS events
             events.push_back(event);
         }
@@ -1126,12 +1131,13 @@ void EVIOBlockedEventParser::ParseDGEMSRSBank(uint32_t rocid, uint32_t *&iptr, u
 //-------------------------
 // MakeDGEMSRSWindowRawData
 //-------------------------
+// PERF (readout optimization): rawData16bits passed by const-ref (was by value:
+// ~7.7 KB copied per APV, 12x per event); staging vectors and the heap-allocated
+// per-call channel array removed. Sample values and ordering are bit-identical.
 void EVIOBlockedEventParser::MakeDGEMSRSWindowRawData(JEvent *event, uint32_t rocid, uint32_t slot, uint32_t itrigger,
-                                                      uint32_t apv_id, vector<int> rawData16bits) {
+                                                      uint32_t apv_id, const vector<int> &rawData16bits) {
     int32_t idata = 0, firstdata = 0, lastdata = 0;
     int32_t size = rawData16bits.size();
-    vector<float> rawDataTS, rawDataZS;
-    rawDataTS.clear();
 
     int32_t fAPVHeaderLevel = 1500;
     int32_t fNbOfTimeSamples = m_config.NSAMPLES_GEMSRS; // hard coded maximum number of time samples
@@ -1158,12 +1164,16 @@ void EVIOBlockedEventParser::MakeDGEMSRSWindowRawData(JEvent *event, uint32_t ro
     lastdata = firstdata + NCH;
 
     ///////////////////////////////////////////////////////////////////////
-    // loop over time bins and store samples in map for all APV channels //
+    // loop over time bins and store samples directly in the output objects
     ///////////////////////////////////////////////////////////////////////
-    //vector<uint16_t> windowDataAPV[NCH];
-    std::shared_ptr<vector<uint16_t>[]> sptr_windowDataAPV(new vector<uint16_t>[NCH]);
-    vector<uint16_t> *windowDataAPV = sptr_windowDataAPV.get();
-    //for(int i=0; i<NCH; i++) windowDataAPV[i].resize(fNbOfTimeSamples);
+    std::vector<DGEMSRSWindowRawData *> wrds;
+    wrds.reserve(NCH);
+    for (int ichan = 0; ichan < NCH; ichan++) {
+        uint32_t channel = apv_id * 128 + ichan;
+        auto *windowRawData = new DGEMSRSWindowRawData(rocid, slot, channel, itrigger, apv_id, ichan);
+        windowRawData->samples.reserve(fNbOfTimeSamples);
+        wrds.push_back(windowRawData);
+    }
 
     for (int32_t timebin = 0; timebin < fNbOfTimeSamples; timebin++) {
         // Frames from unexpected/changed data formats can be shorter than
@@ -1179,25 +1189,16 @@ void EVIOBlockedEventParser::MakeDGEMSRSWindowRawData(JEvent *event, uint32_t ro
         }
 
         // EXTRACT APV25 DATA FOR A GIVEN TIME BIN
-        rawDataTS.insert(rawDataTS.end(), &rawData16bits[firstdata], &rawData16bits[lastdata]);
+        // (int -> uint16_t directly; the removed float staging round-trip was exact
+        // for the 16-bit ADC value range, so values are unchanged)
         for (int32_t chNo = 0; chNo < NCH; chNo++) {
-            //windowDataAPV[chNo].at(timebin) = rawDataTS[chNo];
-            windowDataAPV[chNo].push_back(rawDataTS[chNo]);
+            wrds[chNo]->samples.push_back(static_cast<uint16_t>(rawData16bits[firstdata + chNo]));
         }
 
         firstdata = lastdata + 12;
         lastdata = firstdata + NCH;
-        rawDataTS.clear();
     }
 
-    // write sample data to GEMSRS object
-    std::vector<DGEMSRSWindowRawData *> wrds;
-    for (int ichan = 0; ichan < NCH; ichan++) {
-        uint32_t channel = apv_id * 128 + ichan;
-        DGEMSRSWindowRawData *windowRawData = new DGEMSRSWindowRawData(rocid, slot, channel, itrigger, apv_id, ichan);
-        windowRawData->samples = windowDataAPV[ichan];
-        wrds.push_back(windowRawData);
-    }
     event->Insert(wrds);
 }
 
