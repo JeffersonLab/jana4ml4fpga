@@ -6,7 +6,9 @@
 #include <vector>
 #include <memory>
 
-#include <JANA/Utils/JEventPool.h>
+#include <JANA/JEvent.h>
+// MIGRATION note (JANA2 2026.x): the JEventPool-based overloads were removed -
+// the old pool API no longer exists and events are now provided by the caller.
 #include <rawdataparser/EVIOBlockedEvent.h>
 
 // #include <rawdataparser/DStatusBits.h>
@@ -72,9 +74,8 @@ public:
     EVIOBlockedEventParserConfig GetConfigCopy() { return m_config; }
     void Configure(EVIOBlockedEventParserConfig config) { m_config = config; }
 
-    std::vector <std::shared_ptr<JEvent>> ParseEVIOBlockedEvent(EVIOBlockedEvent &block, JEventPool &pool);
     std::vector <std::shared_ptr<JEvent>> ParseEVIOBlockedEvent(EVIOBlockedEvent &block, std::shared_ptr<JEvent> &preallocated_event);
-    std::vector <std::shared_ptr<JEvent>> ParseEVIOBlockedEvent(EVIOBlockedEvent &block, JEventPool *pool=nullptr, std::shared_ptr<JEvent> *preallocated_event=nullptr);
+    std::vector <std::shared_ptr<JEvent>> ParseEVIOBlockedEvent(EVIOBlockedEvent &block, std::shared_ptr<JEvent> *preallocated_event);
 
     void ParseBank(uint32_t *istart, uint32_t *iend);
     void ParseEPICSbank(uint32_t* &iptr, uint32_t *iend);
@@ -96,6 +97,11 @@ public:
     void ParseDGEMSRSBank(uint32_t rocid, uint32_t *&iptr, uint32_t *iend);
 
     void MakeDGEMSRSWindowRawData(JEvent *event, uint32_t rocid, uint32_t slot, uint32_t itrigger, uint32_t apv_id, const std::vector<int> &rawData16bits);
+    // MIGRATION (JANA2 2026.x): JEvent::Insert(vector) now REPLACES the databundle
+    // instead of appending, so per-APV inserts would drop all but the last APV.
+    // SRS objects are accumulated here and inserted once per event.
+    void FlushDGEMSRSWindowRawData(JEvent *event);
+    std::vector<DGEMSRSWindowRawData*> m_srs_accumulator;
     void Parsef250Bank(uint32_t rocid, uint32_t *&iptr, uint32_t *iend);
     void MakeDf250WindowRawData(JEvent *event, uint32_t rocid, uint32_t slot, uint32_t itrigger, uint32_t* &iptr, uint32_t *iend);
     void Parsef125Bank(uint32_t rocid, uint32_t *&iptr, uint32_t *iend);

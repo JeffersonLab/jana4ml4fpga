@@ -5,7 +5,7 @@
 #include "PrintUtils.h"
 #include "JANA4ML4FPGA_CLI.h"
 
-#include <JANA/CLI/JVersion.h>
+#include <JANA/JVersion.h>
 #include <JANA/CLI/JBenchmarker.h>
 #include <JANA/CLI/JSignalHandler.h>
 
@@ -16,7 +16,6 @@
 #include <string>
 #include <filesystem>
 
-#include "CDAQTopology.h"
 
 #define QUOTE(name) #name
 #define STR(macro) QUOTE(macro)
@@ -206,19 +205,6 @@ namespace jana {
         }
     }
 
-    /**
-     * Copy EVIO filenames from @param options.evio_filenames to @param evio_file_sources.
-     * @return false if there is no evio file in cli option
-     */
-    bool AddBlockedEventFileSourceFromCli(UserOptions &options, std::vector<std::string> &evio_file_sources) {
-        if (options.evio_filenames.empty()) {
-            std::cout << "No evio files given!" << std::endl << std::endl;
-            return false;
-        }
-
-        evio_file_sources = options.evio_filenames;
-        return true;
-    }
 
     void AddEventSource(JApplication* app, UserOptions& options) {
         for (auto event_src : options.evio_filenames) {
@@ -256,8 +242,7 @@ namespace jana {
 
         auto app = new JApplication(para_mgr);
 
-        if (!options.flags[ReplaceTopology])  // add filenames from cli as normal EventSource
-            jana::AddEventSource(app, options);
+        jana::AddEventSource(app, options);
 
         return app;
     }
@@ -346,18 +331,6 @@ namespace jana {
             JSignalHandler::register_handlers(app);
             printHeaderIMG();
 
-            /// Major changes
-            if (options.flags[ReplaceTopology]) {
-                // Since jana JComponentManager does not support BlockedEventSource yet, we manually manage them now
-                std::vector<std::string> evio_block_file_sources;
-
-                // Copy the evio filenames from options.evio_filenames to evio_file_sources.
-                if (not AddBlockedEventFileSourceFromCli(options, evio_block_file_sources)) {
-                    return -1;
-                }
-                // skip this will make everything the same with jana
-                addCDAQTopology(app, evio_block_file_sources);
-            }
 
             app->Run(true);         // Run JANA in normal mode
         }
@@ -386,8 +359,6 @@ namespace jana {
         tokenizer["--janaversion"] = ShowJANAVersion;
         tokenizer["-c"] = ShowConfigs;
         tokenizer["--configs"] = ShowConfigs;
-        tokenizer["-t"] = ReplaceTopology;
-        tokenizer["--use-cdaq-topology"] = ReplaceTopology;
         tokenizer["-l"] = LoadConfigs;
         tokenizer["--loadconfigs"] = LoadConfigs;
         tokenizer["-d"] = DumpConfigs;
@@ -417,9 +388,6 @@ namespace jana {
                     options.flags[ShowUsage] = true;
                     break;
 
-                case ReplaceTopology:
-                    options.flags[ReplaceTopology] = true;
-                    break;
 
                 case ShowThisVersion:
                     options.flags[ShowThisVersion] = true;

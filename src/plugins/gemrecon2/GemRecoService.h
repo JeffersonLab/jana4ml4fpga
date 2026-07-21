@@ -26,7 +26,7 @@ public:
     explicit GemRecoService(JApplication* app) : m_app(app) {}
 
     void acquire_services(JServiceLocator* /*locator*/) override {
-        m_log = m_app->GetService<Log_service>()->logger("gemrecon2");
+        m_log = m_app->GetService<Log_service>()->logger("gem");
 
         std::string mapping_file = "mapping.cfg";
         m_app->SetDefaultParameter("gemrecon:mapping", mapping_file, "Full path to gem config");

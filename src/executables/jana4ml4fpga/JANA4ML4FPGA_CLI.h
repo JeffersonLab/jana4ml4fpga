@@ -7,14 +7,8 @@
 #define JANA4ML4FPGA_JANA4ML4FPGA_CLI_H
 
 #include <JANA/JApplication.h>
-#include <JANA/Engine/JTopologyBuilder.h>
-#include <JANA/Engine/JBlockSourceArrow.h>
-#include <JANA/Engine/JBlockDisentanglerArrow.h>
-#include <JANA/Engine/JEventProcessorArrow.h>
 
 #include <rawdataparser/EVIOBlockedEvent.h>
-#include "EVIOBlockedEventFileSource.h"
-#include "EVIOBlockProcessor.h"
 
 namespace jana {
 
@@ -28,8 +22,7 @@ namespace jana {
         ShowConfigs,
         LoadConfigs,
         DumpConfigs,
-        ListFactories,
-        ReplaceTopology
+        ListFactories
     };
 
     struct UserOptions {

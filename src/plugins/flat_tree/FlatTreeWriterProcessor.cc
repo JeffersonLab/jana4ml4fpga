@@ -41,9 +41,8 @@ void FlatTreeWriterProcessor::Init() {
     // Get JANA application
     auto app = GetApplication();
 
-    // Get Log level from user parameter or default
-    InitLogger(GetPluginName());
-    logger()->info("This plugin name is: " + GetPluginName());
+    // Aspect logger (see Log_service): persistence/output aspect
+    m_log = app->GetService<Log_service>()->logger("out");
 
     // GEM plane names for srs_prerecon branches. Same parameter keys as gemrecon
     // plugin so a single -Pgemrecon:plane_name_x/_y sets both plugins consistently.
@@ -76,7 +75,7 @@ void FlatTreeWriterProcessor::Init() {
             m_mt_output = stem + "_events.root";
         }
         m_merger = std::make_unique<ROOT::TBufferMerger>(m_mt_output.c_str());
-        logger()->info("MT writer mode: events tree -> '{}' via TBufferMerger "
+        m_log->info("MT writer mode: events tree -> '{}' via TBufferMerger "
                        "(flush every {} fills/thread). Entries are unordered; "
                        "sort by the event_number leaf.", m_mt_output, m_flush_events);
     } else {
@@ -92,10 +91,10 @@ void FlatTreeWriterProcessor::Init() {
         ctx->io.bindToTree(ctx->tree);
         m_legacy_ctx = ctx.get();
         m_contexts.push_back(std::move(ctx));
-        logger()->info("Single-thread writer mode: events tree in shared hists file");
+        m_log->info("Single-thread writer mode: events tree in shared hists file");
     }
 
-    logger()->info("Initialization is done");
+    m_log->info("Initialization is done");
 }
 
 //------------------
@@ -118,7 +117,7 @@ FlatTreeWriterProcessor::WriterCtx& FlatTreeWriterProcessor::GetCtx() {
     std::lock_guard<std::mutex> lock(m_ctx_mutex);
     tl_ctx = ctx.get();
     m_contexts.push_back(std::move(ctx));
-    logger()->debug("Created writer context #{}", m_contexts.size());
+    m_log->debug("Created writer context #{}", m_contexts.size());
     return *tl_ctx;
 }
 
@@ -186,41 +185,42 @@ void FlatTreeWriterProcessor::Process(const std::shared_ptr<const JEvent> &event
     }
 
     // GO OVER FACTORY GENERATED DATA
-    for (auto factory: event->GetFactorySet()->GetAllFactories()) {
-        const std::string &obj_name = factory->GetObjectName();
+    // MIGRATION (JANA2 2026.x): the old pattern scanned GetAllFactories() for the
+    // PlanePeak factory by object name, which modern (JOmniFactory/databundle)
+    // factories do not surface the same way - and it also failed to trigger lazy
+    // factories reliably. Request the products directly instead; absence of the
+    // gemrecon2/fpgacon plugins simply leaves the try-blocks empty.
 
-        // PLUGIN 'gemrecon` data
-        if (has_srs_window_raw_data && obj_name == JTypeInfo::demangle<ml4fpga::gem::PlanePeak>()) {
-            try {
-                // TODO fix it and check for factory
-                auto clusters = event->Get<ml4fpga::gem::SFclust>();
-                SaveGEMSimpleClusters(io, clusters);
-                auto plane_decoded_data = event->GetSingle<ml4fpga::gem::PlaneDecodedData>();
-                SaveGEMDecodedData(io, plane_decoded_data);
-                auto peaks = event->Get<ml4fpga::gem::PlanePeak>();
-                SaveGEMPlanePeak(io, peaks);
-                auto samples = event->Get<ml4fpga::gem::SampleData>();
-                SaveGEMSampleData(io, samples);
-            }
-            catch (std::exception &ex) {
-                m_log->error("Problem saving gemercon data problem: {}", ex.what());
-            }
+    // PLUGIN 'gemrecon2' data
+    if (has_srs_window_raw_data) {
+        try {
+            auto clusters = event->Get<ml4fpga::gem::SFclust>();
+            SaveGEMSimpleClusters(io, clusters);
+            auto plane_decoded_data = event->GetSingle<ml4fpga::gem::PlaneDecodedData>();
+            SaveGEMDecodedData(io, plane_decoded_data);
+            auto peaks = event->Get<ml4fpga::gem::PlanePeak>();
+            SaveGEMPlanePeak(io, peaks);
+            auto samples = event->Get<ml4fpga::gem::SampleData>();
+            SaveGEMSampleData(io, samples);
         }
+        catch (std::exception &ex) {
+            // No GEM reconstruction in this configuration (or it failed) - debug only
+            m_log->debug("GEM recon data unavailable: {}", ex.what());
+        }
+    }
 
-        // PLUGIN 'fpgacon` data
-        if (has_f125_window_raw_data && obj_name == JTypeInfo::demangle<ml4fpga::fpgacon::F125Cluster>()) {
-            try {
-                // TODO fix it and check for factory
-                auto clusters = event->Get<ml4fpga::fpgacon::F125Cluster>();
-                SaveFPGAClusters(io, clusters);
-                auto hit_track_assocs = event->Get<ml4fpga::fpgacon::FpgaHitsToTrack>();
-                SaveFPGAHitsToTracks(io, hit_track_assocs);
-                auto track_fits = event->Get<ml4fpga::fpgacon::FpgaTrackFit>();
-                SaveFPGATrackFits(io, track_fits);
-            }
-            catch (std::exception &ex) {
-                m_log->error("Problem saving fpgacon data problem: {}", ex.what());
-            }
+    // PLUGIN 'fpgacon' data (plugin currently not ported - data appears when it is)
+    if (has_f125_window_raw_data) {
+        try {
+            auto clusters = event->Get<ml4fpga::fpgacon::F125Cluster>();
+            SaveFPGAClusters(io, clusters);
+            auto hit_track_assocs = event->Get<ml4fpga::fpgacon::FpgaHitsToTrack>();
+            SaveFPGAHitsToTracks(io, hit_track_assocs);
+            auto track_fits = event->Get<ml4fpga::fpgacon::FpgaTrackFit>();
+            SaveFPGATrackFits(io, track_fits);
+        }
+        catch (std::exception &ex) {
+            m_log->debug("FPGA recon data unavailable: {}", ex.what());
         }
     }
 
@@ -252,7 +252,7 @@ void FlatTreeWriterProcessor::Finish() {
         }
         m_contexts.clear();      // release TBufferMergerFile handles
         m_merger.reset();        // finalize the merged output file
-        logger()->info("MT writer finished: {} entries merged into '{}'", total, m_mt_output);
+        m_log->info("MT writer finished: {} entries merged into '{}'", total, m_mt_output);
     } else {
         m_main_dir->cd();
         m_legacy_ctx->tree->Write();

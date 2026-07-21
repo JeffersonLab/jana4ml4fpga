@@ -25,7 +25,7 @@ public:
 
     void acquire_services(JServiceLocator *locater) override {
         auto log_service = m_app->GetService<Log_service>();
-        m_log = log_service->logger("RootFile");
+        m_log = log_service->logger("out");
     }
 
     /// This will return a pointer to the top-level directory of the

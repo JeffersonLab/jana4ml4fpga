@@ -4,7 +4,7 @@
 # (system package, conda, or sourced thisroot.sh).
 #
 # JANA2 is built the same way the docker images build it (see docker/ml4fpga-pre):
-#   -DUSE_ROOT=On -DUSE_PODIO=Off -DUSE_ZEROMQ=On
+#   -DUSE_ROOT=On -DUSE_PODIO=Off -DUSE_ZEROMQ=Off
 # Because this project consumes JANA2 through its installed JANAConfig.cmake
 # (JANA_DIR, JANA_INCLUDE_DIR, JANA_LIB, ...), JANA2 is configured, built and
 # installed into ${CMAKE_BINARY_DIR}/deps/jana2 at configure time, and then the
@@ -45,7 +45,7 @@ find_package(JANA QUIET)
 if(JANA_FOUND)
     message(STATUS "${CMAKE_PROJECT_NAME}: JANA2 found: ${JANA_DIR}")
 else()
-    set(JANA2_VERSION "v2.1.2" CACHE STRING "JANA2 git tag to fetch and build")
+    set(JANA2_VERSION "f815961e" CACHE STRING "JANA2 git tag/SHA to fetch and build (master @ v2026.03.00 + gcc16 tomlplusplus fix)")
     set(JANA2_SOURCE_DIR ${CMAKE_BINARY_DIR}/deps/jana2-src)
     set(JANA2_BUILD_DIR ${CMAKE_BINARY_DIR}/deps/jana2-build)
     set(JANA2_INSTALL_DIR ${CMAKE_BINARY_DIR}/deps/jana2)
@@ -57,7 +57,7 @@ else()
     FetchContent_Populate(jana2_download
             GIT_REPOSITORY https://github.com/JeffersonLab/JANA2.git
             GIT_TAG ${JANA2_VERSION}
-            GIT_SHALLOW TRUE
+            GIT_SHALLOW FALSE  # SHA pins cannot be fetched shallowly
             SOURCE_DIR ${JANA2_SOURCE_DIR}
             BINARY_DIR ${CMAKE_BINARY_DIR}/deps/jana2-populate-bin
             SUBBUILD_DIR ${CMAKE_BINARY_DIR}/deps/jana2-populate-subbuild)
@@ -92,7 +92,7 @@ else()
                     -DCMAKE_PROJECT_INCLUDE=${CMAKE_SOURCE_DIR}/cmake/vdt_stub.cmake
                     -DUSE_ROOT=On
                     -DUSE_PODIO=Off
-                    -DUSE_ZEROMQ=On
+                    -DUSE_ZEROMQ=Off
                     -DUSE_PYTHON=Off
                 RESULT_VARIABLE JANA2_CONFIGURE_RESULT)
         if(JANA2_CONFIGURE_RESULT)

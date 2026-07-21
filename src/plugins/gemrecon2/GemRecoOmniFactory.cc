@@ -1,29 +1,13 @@
-#include "GemRecoMultifactory.h"
+#include "GemRecoOmniFactory.h"
 
-#include <JANA/JEvent.h>
+#include <gemreco/workspace.hpp>
 
-#include <rawdataparser/DGEMSRSWindowRawData.h>
-#include <services/log/Log_service.h>
-
-void GemRecoMultifactory::Init() {
-    auto app = japp;  // JMultifactory has no GetApplication in this JANA version
-    m_service = app->GetService<GemRecoService>();
-    m_log = app->GetService<Log_service>()->logger("gemrecon2:factory");
-}
-
-void GemRecoMultifactory::Process(const std::shared_ptr<const JEvent>& event) {
+void GemRecoOmniFactory::Execute(int32_t /*run_nr*/, uint64_t event_nr) {
     // --- marshal EVIO -> library input -----------------------------------------
-    std::vector<const DGEMSRSWindowRawData*> srs;
-    try {
-        srs = event->Get<DGEMSRSWindowRawData>();
-    } catch (...) {
-        // No SRS data in this event (e.g. technical events) - publish nothing
-    }
-
     gemreco::RawEvent raw;
-    raw.event_number = event->GetEventNumber();
-    raw.srs.reserve(srs.size());
-    for (auto hit : srs) {
+    raw.event_number = event_nr;
+    raw.srs.reserve(m_srs_in().size());
+    for (const auto* hit : m_srs_in()) {
         gemreco::SrsChannelData ch;
         ch.apv_id = static_cast<int>(hit->apv_id);
         ch.raw_channel_apv = static_cast<int>(hit->channel_apv);
@@ -37,9 +21,9 @@ void GemRecoMultifactory::Process(const std::shared_ptr<const JEvent>& event) {
 
     // --- republish as JANA objects ---------------------------------------------
     std::vector<ml4fpga::gem::PlanePeak*> peaks;
-    auto pf_result = new ml4fpga::gem::PlanePeakFindingResult();
+    auto* pf_result = new ml4fpga::gem::PlanePeakFindingResult();
     for (const auto& p : res.peaks) {
-        auto out = new ml4fpga::gem::PlanePeak();
+        auto* out = new ml4fpga::gem::PlanePeak();
         out->plane_id = p.plane_id;
         out->plane_name = p.plane_name;
         out->time_id = p.time_id;
@@ -55,7 +39,7 @@ void GemRecoMultifactory::Process(const std::shared_ptr<const JEvent>& event) {
 
     std::vector<ml4fpga::gem::SFclust*> clusters;
     for (const auto& c : res.clusters) {
-        auto out = new ml4fpga::gem::SFclust();
+        auto* out = new ml4fpga::gem::SFclust();
         out->index_x = c.index_x;
         out->index_y = c.index_y;
         out->pos_x = c.pos_x;
@@ -66,7 +50,7 @@ void GemRecoMultifactory::Process(const std::shared_ptr<const JEvent>& event) {
         clusters.push_back(out);
     }
 
-    auto plane_decoded = new ml4fpga::gem::PlaneDecodedData();
+    auto* plane_decoded = new ml4fpga::gem::PlaneDecodedData();
     for (auto& [name, pd] : res.planes) {
         ml4fpga::gem::AdcDecodedData d;
         d.data = pd.data;
@@ -78,7 +62,7 @@ void GemRecoMultifactory::Process(const std::shared_ptr<const JEvent>& event) {
     std::vector<ml4fpga::gem::SampleData*> samples;
     samples.reserve(res.samples.size());
     for (const auto& s : res.samples) {
-        auto out = new ml4fpga::gem::SampleData();
+        auto* out = new ml4fpga::gem::SampleData();
         out->id = s.id;
         out->channel = s.channel;
         out->raw_channel = s.raw_channel;
@@ -94,9 +78,9 @@ void GemRecoMultifactory::Process(const std::shared_ptr<const JEvent>& event) {
         samples.push_back(out);
     }
 
-    SetData("", peaks);
-    SetData("", std::vector<ml4fpga::gem::PlanePeakFindingResult*>{pf_result});
-    SetData("", clusters);
-    SetData("", std::vector<ml4fpga::gem::PlaneDecodedData*>{plane_decoded});
-    SetData("", samples);
+    m_peaks_out() = std::move(peaks);
+    m_peak_result_out() = {pf_result};
+    m_clusters_out() = std::move(clusters);
+    m_plane_data_out() = {plane_decoded};
+    m_samples_out() = std::move(samples);
 }

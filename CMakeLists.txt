@@ -4,7 +4,7 @@ project(JANA4ML4FPGA VERSION 0.0.0)
 
 # Make C++17 a default
 if(NOT "${CMAKE_CXX_STANDARD}")
-    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD 20)  # ROOT 6.40 and JANA2 2026.x are C++20
 endif()
 message(STATUS "CMAKE_CXX_STANDARD = ${CMAKE_CXX_STANDARD}")
 

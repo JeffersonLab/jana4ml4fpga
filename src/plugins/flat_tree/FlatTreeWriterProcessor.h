@@ -1,8 +1,9 @@
 #pragma once
 
 #include <JANA/JEventProcessor.h>
-#include <JANA/JEventProcessorSequentialRoot.h>
-#include <extensions/spdlog/SpdlogMixin.h>
+#include <JANA/Services/JGlobalRootLock.h>
+#include <memory>
+#include <spdlog/logger.h>
 #include <TDirectory.h>
 #include <TH1F.h>
 #include <TH2F.h>
@@ -82,8 +83,7 @@ struct FlatIoBundle {
 }  // namespace flatio
 
 class FlatTreeWriterProcessor:
-        public JEventProcessor,
-        public spdlog::extensions::SpdlogMixin<FlatTreeWriterProcessor>   // this automates proper Log initialization
+        public JEventProcessor
 {
 public:
     explicit FlatTreeWriterProcessor(JApplication *);
@@ -123,6 +123,7 @@ private:
     TDirectory* m_main_dir = nullptr;                // legacy mode: shared hists file dir
 
     std::shared_ptr<JGlobalRootLock> m_glb_root_lock;
+    std::shared_ptr<spdlog::logger> m_log;   // aspect logger: "out"
 
     uint16_t findBestSrsSamle(std::vector<uint16_t> samples);
 

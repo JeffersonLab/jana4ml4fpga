@@ -26,7 +26,7 @@ public:
     void acquire_services(JServiceLocator *locater) override {
         auto log_service = m_app->GetService<Log_service>();
         auto root_file_service = m_app->GetService<RootFile_service>();
-        m_log = log_service->logger("dqm-service");
+        m_log = log_service->logger("dqm");
         m_root_file = root_file_service->GetHistFile();
         m_top_dir = m_root_file->mkdir("dqm", "Data Quality Monitoring ", /*returnExistingDirectory*/ true);
         m_events_dir = m_top_dir->mkdir("events", "Plots per event", /*returnExistingDirectory*/ true);

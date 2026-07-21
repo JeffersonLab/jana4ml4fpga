@@ -3,6 +3,7 @@
 //
 
 #include <rawdataparser/EVIOBlockedEventParser.h>
+#include <services/log/Log_service.h>
 
 #include "SerialEvioFileSource.h"
 
@@ -89,7 +90,7 @@ void SerialEvioFileSource::GetEvent(std::shared_ptr <JEvent> event) {
 }
 
 void SerialEvioFileSource::Open() {
-    InitLogger("SerialEvioFileSource");  // init spdlog
+    m_log = GetApplication()->GetService<Log_service>()->logger("evio");
     m_evio_filename = GetResourceName();
     m_log->info("GetResourceName() = {}", m_evio_filename);
     SerialEvioFileSource::OpenEVIOFile(m_evio_filename);
