@@ -76,6 +76,7 @@ class InstallInfo:
                 source_dir = path.join(self.top_dir, "JANA4ML4FPGA")  # will be cloned
         self.source_dir = source_dir
         self.build_dir = path.join(self.source_dir, "build")
+        self.install_dir = path.join(self.source_dir, "install")  # matches CMakeLists default
 
         self.scripts_dir = path.join(self.top_dir, INSTALL_SCRIPTS_DIR_NAME)
         self.script_setup_conda = path.join(self.scripts_dir, "setup_conda.sh")
@@ -136,6 +137,13 @@ export {env_name_top_dir}={top_dir}
 source $ML4FPGA_TOP_DIR/miniforge/etc/profile.d/conda.sh
 conda activate {conda_env_name}
 
+# JANA4ML4FPGA install: put its binaries, libraries and JANA plugins on the paths
+export ML4FPGA_INSTALL_DIR={install_dir}
+export PATH="$ML4FPGA_INSTALL_DIR/bin${{PATH:+:${{PATH}}}}"
+export LD_LIBRARY_PATH="$ML4FPGA_INSTALL_DIR/lib${{LD_LIBRARY_PATH:+:${{LD_LIBRARY_PATH}}}}"
+export JANA_PLUGIN_PATH="$ML4FPGA_INSTALL_DIR/plugins${{JANA_PLUGIN_PATH:+:${{JANA_PLUGIN_PATH}}}}"
+export CMAKE_PREFIX_PATH="$ML4FPGA_INSTALL_DIR${{CMAKE_PREFIX_PATH:+:${{CMAKE_PREFIX_PATH}}}}"
+
 # glibc allocator tuning - required for the multithreaded readout speedup (~2x)
 export GLIBC_TUNABLES={glibc_tunables}
 """.format(env_name_top_dir=ENV_NAME_TOP_DIR, glibc_tunables=GLIBC_TUNABLES_VALUE,
@@ -147,6 +155,17 @@ setenv {env_name_top_dir} {top_dir}
 # Activate the conda environment
 source $ML4FPGA_TOP_DIR/miniforge/etc/profile.d/conda.csh
 conda activate {conda_env_name}
+
+# JANA4ML4FPGA install: put its binaries, libraries and JANA plugins on the paths
+setenv ML4FPGA_INSTALL_DIR {install_dir}
+if ( ! $?PATH )             setenv PATH ""
+if ( ! $?LD_LIBRARY_PATH )  setenv LD_LIBRARY_PATH ""
+if ( ! $?JANA_PLUGIN_PATH ) setenv JANA_PLUGIN_PATH ""
+if ( ! $?CMAKE_PREFIX_PATH ) setenv CMAKE_PREFIX_PATH ""
+setenv PATH             ${{ML4FPGA_INSTALL_DIR}}/bin:${{PATH}}
+setenv LD_LIBRARY_PATH  ${{ML4FPGA_INSTALL_DIR}}/lib:${{LD_LIBRARY_PATH}}
+setenv JANA_PLUGIN_PATH ${{ML4FPGA_INSTALL_DIR}}/plugins:${{JANA_PLUGIN_PATH}}
+setenv CMAKE_PREFIX_PATH ${{ML4FPGA_INSTALL_DIR}}:${{CMAKE_PREFIX_PATH}}
 
 # glibc allocator tuning - required for the multithreaded readout speedup (~2x)
 setenv GLIBC_TUNABLES {glibc_tunables}
@@ -190,7 +209,7 @@ if [ ! -f "{source_dir}/CMakeLists.txt" ]; then
     git clone --branch {branch} {repo_url} "{source_dir}"
 fi
 
-cmake -S "{source_dir}" -B "{build_dir}" -DCMAKE_BUILD_TYPE=Release
+cmake -S "{source_dir}" -B "{build_dir}" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="{install_dir}"
 cmake --build "{build_dir}" --target install -j"$(nproc)"
 """.format(**install_info.asdict())
 
