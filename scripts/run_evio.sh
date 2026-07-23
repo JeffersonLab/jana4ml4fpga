@@ -98,15 +98,18 @@ else
     sleep 1
 
     set -x
-    jana4ml4fpga -Pplugins=CDAQfile,flat_tree,root_output,gemrecon,dqm \
+    # Migrated to JANA2 master: gemrecon -> gemrecon2 (retired DQM processor, so no
+    # 'dqm' plugin here), and aspect logging (-P<aspect>:log / -Plog:level) instead
+    # of the old per-factory -P...:LogLevel. gemrecon2 still reads gemrecon:mapping.
+    # For the parallel source use -Pplugins=CDAQfileMT + -Pnthreads=N -Pevio:parallel=1.
+    jana4ml4fpga -Pplugins=CDAQfile,flat_tree,root_output,gemrecon2 \
     -Pjana:nevents=${MAXEVT} \
     -Pjana:timeout=0 \
     -Pdaq:srs_window_raw:ntsamples=${SRSBIN} \
     -Pjana:debug_plugin_loading=1 \
-    -Pevio:LogLevel=trace \
-    -Pgemrecon:LogLevel=info \
-    -Pgemrecon:LogLevel=info \
-    -Pgemrecon:ClusterF:LogLevel=info \
+    -Plog:level=info \
+    -Pevio:log=trace \
+    -Pgem:log=info \
     -Pgemrecon:mapping=${SRS_MAPPING} \
     -Phistsfile=${ROOT_FILENAME}  $FILELIST
     set +x

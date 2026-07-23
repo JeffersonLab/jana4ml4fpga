@@ -11,9 +11,10 @@ cmake/fetch_dependencies.cmake), so this script only has to provide ROOT + a
 C++20 toolchain and then run cmake.
 
 Usage:
-    python3 install_conda.py                 # all steps
-    python3 install_conda.py -s setup_conda  # a single step
-    python3 install_conda.py -s build_soft   # rebuild only
+    python3 install_software.py                 # all steps
+    python3 install_software.py -s setup_conda  # a single step
+    python3 install_software.py -s build_soft   # rebuild only
+    python3 install_software.py --clear         # remove everything it installed
 
 Environment variables:
     ML4FPGA_TOP_DIR      install location (conda + generated scripts).
@@ -31,6 +32,7 @@ import argparse
 import os
 import platform
 import shlex
+import shutil
 import subprocess
 from collections import OrderedDict
 from datetime import datetime
@@ -68,12 +70,14 @@ class InstallInfo:
         self.repo_url = os.environ.get(
             "ML4FPGA_REPO_URL", "https://github.com/JeffersonLab/JANA4ML4FPGA.git")
         self.branch = os.environ.get("ML4FPGA_BRANCH", "main")
-        source_dir = os.environ.get("ML4FPGA_SOURCE_DIR")
+        self.source_override = os.environ.get("ML4FPGA_SOURCE_DIR")
+        self.auto_clone_dir = path.join(self.top_dir, "JANA4ML4FPGA")
+        source_dir = self.source_override
         if not source_dir:
             if path.isfile(path.join(self.this_script_dir, "CMakeLists.txt")):
                 source_dir = self.this_script_dir  # running from inside the repo
             else:
-                source_dir = path.join(self.top_dir, "JANA4ML4FPGA")  # will be cloned
+                source_dir = self.auto_clone_dir  # will be cloned
         self.source_dir = source_dir
         self.build_dir = path.join(self.source_dir, "build")
         self.install_dir = path.join(self.source_dir, "install")  # matches CMakeLists default
@@ -86,6 +90,8 @@ class InstallInfo:
         self.script_env_csh = path.join(self.top_dir, "setup_env.csh")
 
     def asdict(self):
+        # Only path-like string attributes are used by the templates' .format();
+        # non-template attributes (source_override, auto_clone_dir) are harmless.
         return dict(self.__dict__)
 
     def print_self(self):
@@ -161,7 +167,7 @@ export GLIBC_TUNABLES={glibc_tunables}
 template_user_csh = """\
 setenv {env_name_top_dir} {top_dir}
 
-# ROOT + toolchain from the conda env (set directly - see note in install_conda.py)
+# ROOT + toolchain from the conda env (set directly - see note in install_software.py)
 setenv CONDA_PREFIX {conda_env_dir}
 setenv ROOTSYS {conda_env_dir}
 if ( ! $?PATH )            setenv PATH ""
@@ -282,6 +288,18 @@ def is_conda_env_exist():
     return path.isdir(env_dir) and os.listdir(env_dir)
 
 
+def _remove(target):
+    """Remove a file or directory tree if it exists; print what happens."""
+    if path.islink(target) or path.isfile(target):
+        print(f"  rm    {target}")
+        os.remove(target)
+    elif path.isdir(target):
+        print(f"  rm -r {target}")
+        shutil.rmtree(target, ignore_errors=True)
+    else:
+        print(f"  (absent) {target}")
+
+
 # ---------------------------------------------------------------------------#
 #  Steps                                                                       #
 # ---------------------------------------------------------------------------#
@@ -323,6 +341,41 @@ def step3_build_software():
     run("bash " + install_info.script_build_soft)
 
 
+def clear_all():
+    """Remove everything the installer created, back to the pre-install state:
+    the Miniforge tree, the generated install_scripts/ + setup_env.*, and the
+    build/ and install/ trees. The project source is left untouched UNLESS this
+    installer auto-cloned it into $TOP_DIR/JANA4ML4FPGA (never a checkout the
+    script lives in, never an explicit ML4FPGA_SOURCE_DIR)."""
+    targets = [
+        install_info.conda_dir,       # miniforge
+        install_info.scripts_dir,     # install_scripts/
+        install_info.script_env_sh,   # setup_env.sh
+        install_info.script_env_csh,  # setup_env.csh
+        install_info.build_dir,       # <source>/build
+        install_info.install_dir,     # <source>/install
+    ]
+
+    # Only remove the source tree when WE cloned it (auto-clone location, and no
+    # explicit override). Removing build/ and install/ above already covers the
+    # in-repo and explicit-source cases without touching the checkout itself.
+    remove_clone = (
+        install_info.source_override is None
+        and install_info.source_dir == install_info.auto_clone_dir
+        and install_info.source_dir != install_info.this_script_dir
+    )
+    if remove_clone:
+        targets.append(install_info.auto_clone_dir)
+
+    print("Removing installed artifacts (back to pre-install state):")
+    for t in targets:
+        _remove(t)
+
+    if not remove_clone and path.isdir(install_info.source_dir):
+        print(f"\nLeft the project source untouched: {install_info.source_dir}")
+    print("\nDone.")
+
+
 if __name__ == "__main__":
     steps = OrderedDict()
     steps["gen_scripts"] = step0_generate_scripts
@@ -342,9 +395,16 @@ if __name__ == "__main__":
         help="Name of a single installation step. 'all' (default) runs everything.",
         default="all",
     )
+    parser.add_argument(
+        "--clear", action="store_true",
+        help="Remove everything the installer created (miniforge, install_scripts, "
+             "setup_env.*, build, install) and exit.",
+    )
     args = parser.parse_args()
 
-    if args.step == "all":
+    if args.clear:
+        clear_all()
+    elif args.step == "all":
         for step_func in steps.values():
             step_func()
     elif args.step in steps:

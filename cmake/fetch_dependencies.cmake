@@ -81,7 +81,7 @@ else()
     # JExecutionEngine mutex, which otherwise serializes every worker through
     # recycling. ~2x readout throughput; not yet upstream. This is the SAME patch
     # the docker image applies (cmake/patches/jana2-master-clearoutputs.patch), so
-    # every build path - install_conda, plain cmake, docker - gets it.
+    # every build path - install_software, plain cmake, docker - gets it.
     # Idempotent: applied only when the source does not already contain it.
     file(READ ${JANA2_SOURCE_DIR}/src/libraries/JANA/Topology/JArrow.h _jana2_jarrow_h)
     if(NOT _jana2_jarrow_h MATCHES "ClearOutputs")
@@ -145,4 +145,25 @@ else()
 
     find_package(JANA REQUIRED HINTS ${JANA2_INSTALL_DIR})
     message(STATUS "${CMAKE_PROJECT_NAME}: JANA2 built and found: ${JANA_DIR}")
+endif()
+
+# Self-contained install: when JANA2 is the copy we fetched into the build tree
+# (build/deps/jana2) rather than a system/pre-installed one, install its runtime
+# into our prefix too, so libJANA.so ships in install/lib and JANA's own plugins
+# in install/plugins - otherwise jana4ml4fpga can't find libJANA.so at runtime
+# without pointing LD_LIBRARY_PATH at the build tree.
+#
+# This lives OUTSIDE the fetch branch above on purpose: on a *reconfigure*,
+# find_package(JANA QUIET) finds the cached fetched copy (JANA_FOUND is true) and
+# the fetch branch is skipped - but the install rule must still be registered.
+# Keying on JANA_DIR pointing inside the build tree also means it is correctly
+# skipped when JANA2 is genuinely pre-installed (docker/system), where copying it
+# into our prefix would be wrong.
+if(DEFINED JANA_DIR AND JANA_DIR MATCHES "^${CMAKE_BINARY_DIR}/deps/jana2")
+    set(_ml4_fetched_jana2 ${CMAKE_BINARY_DIR}/deps/jana2)
+    install(DIRECTORY ${_ml4_fetched_jana2}/lib/     DESTINATION lib     USE_SOURCE_PERMISSIONS)
+    install(DIRECTORY ${_ml4_fetched_jana2}/lib64/   DESTINATION lib64   USE_SOURCE_PERMISSIONS OPTIONAL)
+    install(DIRECTORY ${_ml4_fetched_jana2}/bin/     DESTINATION bin     USE_SOURCE_PERMISSIONS OPTIONAL)
+    install(DIRECTORY ${_ml4_fetched_jana2}/include/ DESTINATION include                        OPTIONAL)
+    install(DIRECTORY ${_ml4_fetched_jana2}/plugins/ DESTINATION plugins USE_SOURCE_PERMISSIONS OPTIONAL)
 endif()
