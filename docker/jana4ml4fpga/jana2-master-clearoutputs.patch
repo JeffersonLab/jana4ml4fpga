@@ -1,0 +1,97 @@
+diff --git a/src/libraries/JANA/Engine/JExecutionEngine.cc b/src/libraries/JANA/Engine/JExecutionEngine.cc
+index 60fd6a94..8f4d56e7 100644
+--- a/src/libraries/JANA/Engine/JExecutionEngine.cc
++++ b/src/libraries/JANA/Engine/JExecutionEngine.cc
+@@ -456,6 +456,15 @@ void JExecutionEngine::RunWorker(Worker worker) {
+
+ void JExecutionEngine::ExchangeTask(Task& task, size_t worker_id, bool nonblocking) {
+
++    if (task.arrow != nullptr) {
++        // Clear pool-bound output events BEFORE acquiring the engine mutex: this is
++        // the expensive part of recycling an event (JFactorySet::Clear deletes every
++        // inserted object - thousands of deallocations for large raw events). Doing
++        // it under m_mutex serializes all workers through one lock and caps
++        // event-rate-heavy topologies regardless of thread count.
++        task.arrow->ClearOutputs(task.outputs, task.output_count);
++    }
++
+     auto checkin_time = std::chrono::steady_clock::now();
+     // It's important to start measuring this _before_ acquiring the lock because acquiring the lock
+     // may be a big part of the scheduler overhead
+@@ -779,6 +788,8 @@ JArrow::FireResult JExecutionEngine::Fire(size_t arrow_id, size_t location_id) {
+         }
+     }
+
++    arrow->ClearOutputs(outputs, output_count);  // expensive event recycling: outside the lock
++
+     lock.lock();
+     arrow->Push(outputs, output_count, location_id);
+     arrow_state.active_tasks -= 1;
+diff --git a/src/libraries/JANA/Topology/JArrow.cc b/src/libraries/JANA/Topology/JArrow.cc
+index 864c7b18..51620ed8 100644
+--- a/src/libraries/JANA/Topology/JArrow.cc
++++ b/src/libraries/JANA/Topology/JArrow.cc
+@@ -41,6 +41,10 @@ JEvent* JArrow::Pull(size_t port_index, size_t location_id) {
+
+
+ void JArrow::Push(OutputData& outputs, size_t output_count, size_t location_id) {
++    // NOTE: Push() is called while holding the JExecutionEngine mutex (the queues
++    // and pools are not thread-safe by themselves). Keep it cheap: the expensive
++    // per-event cleanup lives in ClearOutputs(), which the engine calls *before*
++    // acquiring the mutex.
+     for (size_t output = 0; output < output_count; ++output) {
+         JEvent* event = outputs[output].first;
+         int port_index = outputs[output].second;
+@@ -49,7 +53,6 @@ void JArrow::Push(OutputData& outputs, size_t output_count, size_t location_id)
+             port.GetQueue()->Push(event, location_id);
+         }
+         else if (port.GetPool() != nullptr) {
+-            event->Clear(!port.GetSkipFinishEvent());
+             port.GetPool()->Ingest(event, location_id);
+         }
+         else {
+@@ -58,6 +61,23 @@ void JArrow::Push(OutputData& outputs, size_t output_count, size_t location_id)
+     }
+ }
+
++void JArrow::ClearOutputs(OutputData& outputs, size_t output_count) {
++    // Runs the expensive part of event recycling - JEvent::Clear(), whose
++    // JFactorySet::Clear deletes every inserted object (thousands of
++    // deallocations for large raw events) and calls JEventSource::DoFinishEvent
++    // (which synchronizes itself). Must be called WITHOUT the JExecutionEngine
++    // mutex held, after Fire() and before Push(), while the outputs are still
++    // exclusively owned by the worker that fired them.
++    for (size_t output = 0; output < output_count; ++output) {
++        JEvent* event = outputs[output].first;
++        int port_index = outputs[output].second;
++        Port& port = GetPort(port_index);
++        if (port.GetQueue() == nullptr && port.GetPool() != nullptr) {
++            event->Clear(!port.GetSkipFinishEvent());
++        }
++    }
++}
++
+ JArrow::FireResult JArrow::Execute(size_t location_id) {
+
+     auto start_total_time = std::chrono::steady_clock::now();
+diff --git a/src/libraries/JANA/Topology/JArrow.h b/src/libraries/JANA/Topology/JArrow.h
+index fcf00d97..003972cc 100644
+--- a/src/libraries/JANA/Topology/JArrow.h
++++ b/src/libraries/JANA/Topology/JArrow.h
+@@ -106,6 +106,16 @@ public:
+
+     void Push(OutputData& outputs, size_t output_count, size_t location_id);
+
++    /// Clears (JEvent::Clear) every output event that is destined for an event
++    /// pool. This is the expensive part of recycling an event: JFactorySet::Clear
++    /// deletes every inserted object, which for large raw events can mean
++    /// thousands of deallocations. It is deliberately separated from Push() so
++    /// that callers can run it *outside* the JExecutionEngine mutex, while the
++    /// (cheap, non-thread-safe) queue/pool operations in Push() stay inside.
++    /// The caller must still own the outputs exclusively, i.e. call this after
++    /// Fire() and before Push().
++    void ClearOutputs(OutputData& outputs, size_t output_count);
++
+
+     const std::string& GetName() { return m_name; }
+     int GetId() { return m_id; }
