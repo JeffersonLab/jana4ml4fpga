@@ -14,5 +14,5 @@ struct EVIOBlockedEventParserConfig {
     bool PARSE_F250 = true;
     bool PARSE_F125 = true;
 
-    int32_t NSAMPLES_GEMSRS = 6;
+    int32_t NSAMPLES_GEMSRS = 3;
 };

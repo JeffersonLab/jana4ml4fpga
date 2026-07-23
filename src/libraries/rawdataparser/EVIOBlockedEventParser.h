@@ -97,9 +97,9 @@ public:
 
     void MakeDGEMSRSWindowRawData(JEvent *event, uint32_t rocid, uint32_t slot, uint32_t itrigger, uint32_t apv_id, std::vector<int> rawData16bits);
     void Parsef250Bank(uint32_t rocid, uint32_t *&iptr, uint32_t *iend);
-    void MakeDf250WindowRawData(JEvent *event, uint32_t rocid, uint32_t slot, uint32_t itrigger, uint32_t* &iptr);
+    void MakeDf250WindowRawData(JEvent *event, uint32_t rocid, uint32_t slot, uint32_t itrigger, uint32_t* &iptr, uint32_t *iend);
     void Parsef125Bank(uint32_t rocid, uint32_t *&iptr, uint32_t *iend);
-    void MakeDf125WindowRawData(JEvent *event, uint32_t rocid, uint32_t slot, uint32_t itrigger, uint32_t* &iptr);
+    void MakeDf125WindowRawData(JEvent *event, uint32_t rocid, uint32_t slot, uint32_t itrigger, uint32_t* &iptr, uint32_t *iend);
     void ParseF1TDCBank(uint32_t rocid, uint32_t *&iptr, uint32_t *iend);
     void ParseTIBank(uint32_t rocid, uint32_t *&iptr, uint32_t *iend);
 

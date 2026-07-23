@@ -24,6 +24,15 @@
 #include "GemPlanePeak.h"
 #include <plugins/gemrecon/PlanePeak.h>
 
+#include "FpgaF125Cluster.h"
+#include "FpgaHitToTrack.h"
+#include "FpgaTrackFit.h"
+#include "GemSampleData.h"
+#include "plugins/fpgacon/F125Cluster.h"
+#include "plugins/fpgacon/FpgaHitsToTrack.h"
+#include "plugins/fpgacon/FpgaTrackFit.h"
+#include "plugins/gemrecon/SampleData.h"
+
 class JEvent;
 class JApplication;
 
@@ -42,6 +51,7 @@ public:
     // below. You may, for example, want to open an output file here.
     // Only one thread will call this.
     void Init() override;
+
 
     //----------------------------
     // Process
@@ -76,6 +86,11 @@ private:
     flatio::GemSimpleClusterIO m_gem_scluster_io;
     flatio::SrsPreReconRecordIO m_srs_prerecon_io;
     flatio::GemPlanePeakIO m_gem_peak_io;
+    flatio::GemSampleDataIO m_gem_sample_data_io;
+    flatio::FpgaF125ClusterIO m_fpga_f125_cluster_io;
+    flatio::FpgaHitToTrackIO m_fpga_hits_to_track_io;
+    flatio::FpgaTrackFitIO m_fpga_track_fit_io;
+
 
     std::shared_ptr<JGlobalRootLock> m_glb_root_lock;
 
@@ -87,6 +102,11 @@ private:
     void SaveF125WindowRawData(std::vector<const Df125WindowRawData *> records);
     void SaveF250WindowRawData(std::vector<const Df250WindowRawData *> records);
     void SaveGEMSimpleClusters(std::vector<const ml4fpga::gem::SFclust *> clusters);
+    void SaveFPGAClusters(const std::vector<const ml4fpga::fpgacon::F125Cluster *> & clusters);
+    void SaveFPGAHitsToTracks(const std::vector<const ml4fpga::fpgacon::FpgaHitsToTrack *> & ht_assocs);
+    void SaveFPGATrackFits(const std::vector<const ml4fpga::fpgacon::FpgaTrackFit *> & tfits);
+    void SaveGEMSampleData(const std::vector<const ml4fpga::gem::SampleData *> & samples);
+
 
 
 //    void SaveGEMDecodedData(const ml4fpga::gem::DecodedData *pData);

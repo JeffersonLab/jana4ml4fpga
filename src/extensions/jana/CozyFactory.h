@@ -371,7 +371,9 @@ public:
             }
         }
         catch(std::exception &e) {
-            throw JException(e.what());
+            m_logger->warn("Exception during process {}", e.what());
+            //m_logger->warn("Exception during process {}", e.what());
+            //throw JException();
         }
     }
 

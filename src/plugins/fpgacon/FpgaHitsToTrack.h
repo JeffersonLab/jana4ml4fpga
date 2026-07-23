@@ -9,6 +9,6 @@
 namespace ml4fpga::fpgacon {
     struct FpgaHitsToTrack {
         int hit_index=0;        /// Index of the hit (cluster)
-        int trk_index=0;        /// Index of the track associated with the hit
+        int track_index=0;        /// Index of the track associated with the hit
     };
 }

@@ -285,8 +285,8 @@ io_classes = [
             FieldInfo('double', 'real_pos'),
         ]),
     ClassInfo(
-        name="F125Cluster",
-        root_name="f125_cluster",
+        name="FpgaF125Cluster",
+        root_name="fpga_f125_cluster",
         fields=[
             FieldInfo('uint32_t', 'id'),
             FieldInfo('float', 'pos_x'),
@@ -302,11 +302,11 @@ io_classes = [
             FieldInfo('float', 'length_dx'),
         ]),
     ClassInfo(
-        name="FpgaHitsToTrack",
+        name="FpgaHitToTrack",
         root_name="fpga_hit_track",
         fields=[
-            FieldInfo('uint32_t', 'hit_id'),
-            FieldInfo('uint32_t', 'track_id')
+            FieldInfo('uint32_t', 'hit_index'),
+            FieldInfo('uint32_t', 'track_index')
         ]),
     ClassInfo(
         name="FpgaTrackFit",
@@ -316,6 +316,24 @@ io_classes = [
             FieldInfo('float', 'slope'),
             FieldInfo('float', 'intersect')
         ]),
+    ClassInfo(
+        name="GemSampleData",
+        root_name="gem_sample_data",
+        fields=[
+            FieldInfo('uint64_t', 'id'),
+            FieldInfo('uint32_t', 'channel'),
+            FieldInfo('uint32_t', 'raw_channel'),
+            FieldInfo('uint32_t', 'time_bin'),
+            FieldInfo('uint32_t', 'apv'),
+            FieldInfo('uint32_t', 'plane'),
+            FieldInfo('uint32_t', 'detector'),
+            FieldInfo('bool',     'is_noise'),
+            FieldInfo('double',   'value'),
+            FieldInfo('double',   'raw_value'),
+            FieldInfo('double',   'rolling_average'),
+            FieldInfo('double',   'rolling_std'),
+        ]),
+
 ]
 
 def gen_fields_code(template: str, class_info: ClassInfo, spaces: int):

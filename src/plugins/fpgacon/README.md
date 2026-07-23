@@ -22,40 +22,69 @@ flowchart TB
     FpgaExchangeFactory <====>  FPGAProcessor(((<strong>F P G A</strong>))):::ext
 ```
 
+# Run files
 
-```mermaid
-flowchart TB
-  classDef alg fill:#44cc;
-  classDef col fill:#cc66ff;
-  subgraph Simulation output
-    direction LR
-    SimHits(<strong>Simulation hits for detectors</strong>:<br/>edm4hep::SimTrackerHit)
-    MCParticles(<strong>MC particles</strong>:<br/>edm4hep::MCParticle)
-  end
+On CERN 2024-07 beam tests, file Data 5083
 
-  SimHits --> HitsReco[<strong>Per detector hits processing</strong>:<br/><i>SiliconTrackerDigi</i><br><i>TrackerHitReconstruction</i>]:::alg
-  HitsReco --> Hits(Hits prepared for tracking)
+```bash
+/home/hdtrdops/DATA/hd_rawdata_005083_000.evio
+```
 
-  Hits --> CKFTracking[<strong>ACTS CFK Tracking</strong>:<br/><i>TrackSourceLinker</i><br><i>TrackParamTruthInit</i><br><i>CFKTracking</i>]:::alg
-  MCParticles --> CKFTracking
+fpga2file.sh
 
-  CKFTracking --> ACTSOutput(ACTS output)
+```bash
+#!/bin/bash
 
-  ACTSOutput --> ACTSToModel[<strong>Convert ACTS to data model</strong>:<br/><i>ParticlesFromTrackFit</i><br><i>TrackProjector</i><br><i>TrackPropagator</i>]:::alg
+set -x
 
-  ACTSToModel --> TrackingModel(Tracking PODIO data)
+jana4ml4fpga \
+  -Pplugins=CDAQfile,flat_tree,root_output,dqm,fpgacon \
+  -Pjana:nevents=1000 \
+  -Pdaq:srs_window_raw:ntsamples=3 \
+  -Pjana:debug_plugin_loading=1 \
+  -Pfpgacon:port=20250 \
+  -Pfpgacon:dedx_threshold=200  \
+  -Pjana:timeout=0 \
+  -Pdqm:max_event=1  \
+  /home/hdtrdops/DATA/hd_rawdata_005083_000.evio
+```
 
-  TrackingModel --> ParticlesWithPID:::alg
-  MCParticles --> ParticlesWithPID[<strong>Track to MC matching</strong>:<br/><i>ParticlesWithPID</i>]
-  ACTSToModel --> CentralTrackSegments
+daq2file.sh
 
-  ParticlesWithPID --> ReconstructedChargedParticles
-  ParticlesWithPID --> ReconstructedChargedParticlesAssociations
+```bash
+#!/bin/bash
 
-  subgraph Tracking output
-    direction LR
-    CentralTrackSegments(<strong>CentralTrackSegments</strong><br/><i>edm4eic::TrackSegments</i>)
-    ReconstructedChargedParticles(<strong>ReconstructedChargedParticles</strong><br/><i>edm4eic::ReconstructedParticle</i>)
-    ReconstructedChargedParticlesAssociations(<strong>ReconstructedChargedParticlesAssociations</strong><br/><i>edm4eic::ReconstructedParticleAssociation</i>)
-  end
+set -x
+
+jana4ml4fpga \
+  -Pplugins=cdaq,flat_tree,root_output,print_evio \
+  -Pjana:nevents=10000 \
+  -Pcdaq:port=20248 \
+  -Pjana:timeout=0  \
+  -Pdaq:srs_window_raw:ntsamples=3 \
+  -Pevio:LogLevel=trace \
+  -Pgemrecon:LogLevel=trace \
+  -Phistsfile=daq_receive.root \
+  tcp-cdaq-evio
+```
+
+daq2fpga.sh
+
+```sh
+#!/bin/sh
+
+set -x
+
+jana4ml4fpga \
+  -Pplugins=cdaq,flat_tree,root_output,dqm,fpgacon \
+  -Pjana:nevents=10000 \
+  -Pdaq:srs_window_raw:ntsamples=3 \
+  -Pcdaq:port=20248 \
+  -Pjana:debug_plugin_loading=1 \
+  -Pfpgacon:port=20250 \
+  -Pfpgacon:dedx_threshold=200  \
+  -Pdqm:max_event=1000  \
+  -Pjana:timeout=0  \
+  -Phistsfile=/home/hdtrdops/romanov/daq_fpga_10k_001.root \
+  tcp-cdaq-evio
 ```

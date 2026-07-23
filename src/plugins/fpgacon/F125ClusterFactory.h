@@ -34,7 +34,7 @@ namespace ml4fpga::fpgacon {
 
 
         Parameter<bool> m_cfg_use_clustering {this, "use_clustering", true, "Maximum num vertices that can be found"};
-        Parameter<double> m_cfg_dedx_threshold {this, "dedx_threshold", 120, "f125 DE/DX threshold to fill histograms"};
+        Parameter<double> m_cfg_dedx_threshold {this, "dedx_threshold", 150, "f125 DE/DX threshold to fill histograms"};
         Parameter<int> m_cfg_time_window_start {this, "time_window_start", 95, "f125 DE/DX threshold to fill histograms"};
         TH2F * hevt  = nullptr;
         TH2F * hevtc = nullptr;

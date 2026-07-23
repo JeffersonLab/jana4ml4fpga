@@ -141,6 +141,10 @@ public:
     }
 
     std::map<std::string, int> GetPlaneIDFromPlaneMap() { return fPlaneIDFromPlaneMap; }
+    int GetPlaneIDFromPlane(const std::string & planeName) { return fPlaneIDFromPlaneMap[planeName]; }
+
+    std::string  GetPlaneFromPlaneID(int planeId) { return fPlaneFromPlaneIDMap[planeId]; }
+    std::map<int, std::string>  GetPlaneFromPlaneIDMap() { return fPlaneFromPlaneIDMap; }
 
     std::map<std::string, std::vector<float> > GetPadDetectorMap() { return fPadDetectorMap; }
 
@@ -272,6 +276,7 @@ private:
     std::map<int, std::string> fAPVstatusMap;
 
     std::map<std::string, int> fPlaneIDFromPlaneMap;
+    std::map<int, std::string> fPlaneFromPlaneIDMap;
     std::map<int, std::string> fPlaneFromAPVIDMap;
 
     std::map<int, std::string> fReadoutBoardFromIDMap;

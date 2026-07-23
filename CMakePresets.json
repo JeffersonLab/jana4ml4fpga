@@ -7,29 +7,32 @@
     },
     "configurePresets": [
         {
-            "name": "default",
-            "description": "Default build",
+            "name": "combucha",
+            "description": "Chubucha build",
             "hidden": false,
             "generator": "Unix Makefiles",
-            "binaryDir": "${sourceDir}/builda",
+            //"binaryDir": "${sourceDir}/cmake-build-combucha",
 
             "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_BUILD_TYPE": "DebWithRelInfo",
                 "CMAKE_MAKE_PROGRAM": "/usr/bin/make",
-                "CMAKE_C_COMPILER": "/gluonfs1/home/hdtrdops/soft_ml4fpga/miniconda/envs/ml4fpga/bin/gcc",
-                "CMAKE_CXX_COMPILER": "/gluonfs1/home/hdtrdops/soft_ml4fpga/miniconda/envs/ml4fpga/bin/g++",
-                "CMAKE_CXX_STANDARD": "17", 
-                "CLHEP_DIR": "/gluonfs1/home/hdtrdops/soft_ml4fpga/miniconda/envs/ml4fpga",
-                "HEPMC3_DIR": "/gluonfs1/home/hdtrdops/soft_ml4fpga/miniconda/envs/ml4fpga",
-                "JANA_HOME": "/gluonfs1/home/hdtrdops/soft_ml4fpga/jana2/jana2-v2.1.0",
-                "JANA_DIR": "/gluonfs1/home/hdtrdops/soft_ml4fpga/jana2/jana2-v2.1.0/lib/cmake/JANA",
-                "jana4ml4fpga_HOME": "/gluonfs1/home/hdtrdops/soft_ml4fpga/jana4ml4fpga/jana4ml4fpga-main",
-                "ROOT_DIR": "/gluonfs1/home/hdtrdops/soft_ml4fpga/miniconda/envs/ml4fpga/cmake"
+                "CMAKE_C_COMPILER": "/gluonfs1/home/hdtrdops/soft_ml4fpga_MAIN/miniconda/envs/ml4fpga/bin/gcc",
+                "CMAKE_CXX_COMPILER": "/gluonfs1/home/hdtrdops/soft_ml4fpga_MAIN/miniconda/envs/ml4fpga/bin/g++",
+                "CMAKE_CXX_STANDARD": "17",
+                "CLHEP_DIR": "/gluonfs1/home/hdtrdops/soft_ml4fpga_MAIN/miniconda/envs/ml4fpga",
+                "HEPMC3_DIR": "/gluonfs1/home/hdtrdops/soft_ml4fpga_MAIN/miniconda/envs/ml4fpga",
+                "JANA_HOME": "/gluonfs1/home/hdtrdops/soft_ml4fpga_MAIN/jana2/jana2-v2.1.0",
+                "JANA_DIR": "/gluonfs1/home/hdtrdops/soft_ml4fpga_MAIN/jana2/jana2-v2.1.0/lib/cmake/JANA",
+                "jana4ml4fpga_HOME": "/gluonfs1/home/hdtrdops/soft_ml4fpga_MAIN/jana4ml4fpga/jana4ml4fpga-main",
+                "ROOT_DIR": "/gluonfs1/home/hdtrdops/soft_ml4fpga_MAIN/miniconda/envs/ml4fpga/cmake",
+                "CMAKE_INSTALL_PREFIX":"/home/hdtrdops/soft_ml4fpga_MAIN/jana4ml4fpga/jana4ml4fpga-main/install"
             },
             "environment": {
-                "PATH": "/gluonfs1/home/hdtrdops/soft_ml4fpga/miniconda/envs/ml4fpga/bin:${env.PATH}",
-                "LD_LIBRARY_PATH": "/gluonfs1/home/hdtrdops/soft_ml4fpga/miniconda/envs/ml4fpga/lib:${env.LD_LIBRARY_PATH}",
-                "CMAKE_PREFIX_PATH": "/gluonfs1/home/hdtrdops/soft_ml4fpga/miniconda/envs/ml4fpga/share/HepMC3/cmake:/gluonfs1/home/hdtrdops/soft_ml4fpga/jana2/jana2-v2.1.0/lib/cmake/JANA:${env.CMAKE_PREFIX_PATH}"
+                //"PATH": "/gluonfs1/home/hdtrdops/soft_ml4fpga_MAIN/miniconda/envs/ml4fpga/bin:$env{PATH}",
+                //"LD_LIBRARY_PATH": "/gluonfs1/home/hdtrdops/soft_ml4fpga_MAIN/miniconda/envs/ml4fpga/lib:$env{LD_LIBRARY_PATH}"//,
+                // "CMAKE_PREFIX_PATH": "/gluonfs1/home/hdtrdops/soft_ml4fpga_MAIN/miniconda/envs/ml4fpga/share/HepMC3/cmake:/gluonfs1/home/hdtrdops/soft_ml4fpga_MAIN/jana2/jana2-v2.1.0/lib/cmake/JANA:$env{CMAKE_PREFIX_PATH}"
+                "LD_LIBRARY_PATH": "/gluonfs1/home/hdtrdops/soft_ml4fpga_MAIN/miniconda/envs/ml4fpga/lib",
+                "PATH": "/gluonfs1/home/hdtrdops/soft_ml4fpga_MAIN/miniconda/envs/ml4fpga/bin"
             }
         }
     ]

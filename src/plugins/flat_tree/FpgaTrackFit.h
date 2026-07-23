@@ -9,7 +9,6 @@
 namespace flatio {
     struct FpgaTrackFit
     {
-
         uint32_t id;
         float slope;
         float intersect;

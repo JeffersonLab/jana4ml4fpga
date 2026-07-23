@@ -21,12 +21,46 @@ namespace ml4fpga::fpgacon {
 		}
 		return -1;
 	}
+	// -- large GEMTRD mapping --
+//
+#define first_slot 3
+#define gem_x_slot 0
+#define gem_x_ch0 0
 
+#define gem_y_slot 1
+#define gem_y_ch0 48
+
+#define last_slot 8
+#define last_ch 71
+
+	int GetGEMXChan(int fch, int slot)
+{
+  int sl=slot-first_slot;
+  if((sl>=gem_x_slot&&sl<gem_y_slot)||(sl==gem_y_slot&&fch<gem_y_ch0)){
+    int ch=sl*72+fch-gem_x_ch0;
+    return ch;
+  } else {
+    return -1;
+  }
+
+}
+int GetGEMYChan(int fch, int slot)
+{
+  int sl=slot-first_slot;
+  if(sl>7)sl=sl-2;
+  if((sl>gem_y_slot&&sl<last_slot)||(sl==gem_y_slot&&fch>=gem_y_ch0)||(sl==last_slot&&fch<=last_ch)){
+    int ch=(sl-gem_y_slot)*72+fch-gem_y_ch0;
+    return ch;
+  } else {
+    return -1;
+  }
+
+}
 
     void F125ClusterFactory::CozyInit() {
 
     		int nx0 = 100;
-    		int ny0 = 250;
+    		int ny0 = 528;
 
     		hevt = new TH2F("hevt", " Event display; z pos,mm; y pos,mm ", nx0, 0., +30., ny0, -50., +50.);
     		hevt->SetStats(false);
@@ -105,7 +139,7 @@ namespace ml4fpga::fpgacon {
     		auto f125_data = f125_values[i];
     		auto f125_slot = f125_data->slot;
     		auto f125_chan = f125_data->channel;
-    		int f125_gem_chan = GetGEMChan(f125_chan, f125_slot);
+    		int f125_gem_chan = GetGEMYChan(f125_chan, f125_slot);
 
 
     		int amax = 0;

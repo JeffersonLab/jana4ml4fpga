@@ -58,7 +58,15 @@ void ApvDecodedDataFactory::Process(const std::shared_ptr<const JEvent> &event) 
     m_log->debug("new event");
     try {
         auto raw_data = event->GetSingle<RawData>();
-        auto pedestal = const_cast<Pedestal*>(event->GetSingle<ml4fpga::gem::Pedestal>());  // we are not going to modify it, just remove hassle with const map
+        if (raw_data == nullptr) {
+            m_log->debug("RawData is null. No SRS data in this event? Skipping");
+            return;
+        }
+        auto pedestal = event->GetSingle<ml4fpga::gem::Pedestal>();
+        if (pedestal == nullptr) {
+            m_log->debug("Pedestal is null. Skipping event");
+            return;
+        }
 
         auto apv_decoded_data = new ApvDecodedData();
 
@@ -66,9 +74,29 @@ void ApvDecodedDataFactory::Process(const std::shared_ptr<const JEvent> &event) 
             auto apv_id = apv_pair.first;
             auto apv_samples = apv_pair.second;
 
-            auto data = DecodeApv(apv_id, apv_samples.AsTimebins(), pedestal->offsets[apv_id], pedestal->noises[apv_id]);
+            auto timebins = apv_samples.AsTimebins();
+            auto offsets_it = pedestal->offsets.find(apv_id);
+            auto noises_it = pedestal->noises.find(apv_id);
+
+            // Skip APVs with truncated/malformed data or missing pedestals instead of
+            // reading out of bounds in DecodeApv. Skipped APVs are zero-substituted
+            // later in PlaneDecodedDataFactory
+            bool pedestals_ok = offsets_it != pedestal->offsets.end() && noises_it != pedestal->noises.end()
+                                && offsets_it->second.size() == Constants::ChannelsCount
+                                && noises_it->second.size() == Constants::ChannelsCount;
+            if (timebins.empty() || !pedestals_ok) {
+                if (m_bad_apv_warns < 20) {
+                    m_bad_apv_warns++;
+                    m_log->warn("APV {}: malformed data or pedestals (timebins={}, pedestals_ok={}). Skipping APV.{}",
+                                apv_id, timebins.size(), pedestals_ok,
+                                m_bad_apv_warns == 20 ? " (Further warnings suppressed)" : "");
+                }
+                continue;
+            }
+
+            auto data = DecodeApv(apv_id, timebins, offsets_it->second, noises_it->second);
             data.plane_name = m_mapping->GetPlaneFromAPVID(apv_id);
-            data.detector_name = m_mapping->GetDetectorFromPlane(apv_decoded_data->apv_data[apv_id].plane_name);
+            data.detector_name = m_mapping->GetDetectorFromPlane(data.plane_name);
             data.apv_ids = {apv_id};
             apv_decoded_data->apv_data[apv_id] = data;
         }
@@ -102,9 +130,13 @@ void ApvDecodedDataFactory::Finish() {
     double fZeroSupCut = 10;    // TODO parameter
     int fAPVBaseline = 2500;
     int time_bins_size = raw_data.size();
-    assert(time_bins_size>0);
-    assert(raw_data[0].size() == Constants::ChannelsCount);
-    assert(offsets.size() == Constants::ChannelsCount);
+
+    // Asserts compile out with NDEBUG, so check malformed inputs at runtime too.
+    // Empty result is treated as a missing APV downstream.
+    if (time_bins_size <= 0 || raw_data[0].size() != Constants::ChannelsCount
+        || offsets.size() != Constants::ChannelsCount) {
+        return AdcDecodedData();
+    }
 
     std::vector<double> commonModeOffsets(time_bins_size, 0);
     std::vector<double> rawDataZS(time_bins_size, 0);
@@ -140,10 +172,12 @@ void ApvDecodedDataFactory::Finish() {
         //    if(fAPVID == 0) printf(" Enter  GEMHitDecoder::APVEventDecoder(), timebin = %d, commonMode = %d \n",  timebin, commonMode) ;
 
         // PERFORM COMMON MODE CORRECTION FOR A GIVEN TIME BIN
-        std::transform(channel_values.begin(), channel_values.end(), channel_values.begin(), std::bind2nd(std::minus<Float_t>(), commonMode));
+        // (std::bind2nd was removed in C++17)
+        std::transform(channel_values.begin(), channel_values.end(), channel_values.begin(),
+                       [commonMode](double value) { return value - commonMode; });
 
         //  ADC SUM OVER ALL TIME BINS USE AS THE TEST CRITERIA FOR ZERO SUPPRESSION
-        for(int i=0; i < rawDataZS.size(); i++) {
+        for(size_t i=0; i < rawDataZS.size() && i < channel_values.size(); i++) {
             rawDataZS[i] += channel_values[i];
         }
     }

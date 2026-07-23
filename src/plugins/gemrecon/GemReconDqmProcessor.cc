@@ -59,13 +59,13 @@ void ml4fpga::gem::GemReconDqmProcessor::Init() {
     InitLogger(plugin_name + ":" + JTypeInfo::demangle<GemReconDqmProcessor>());
 
     // Get mapping
-    fMapping = app->GetService<GemMappingService>()->GetMapping();
-    m_apv_id_names_map = fMapping->GetAPVFromIDMap();
+    m_mapping = app->GetService<GemMappingService>()->GetMapping();
+    m_apv_id_names_map = m_mapping->GetAPVFromIDMap();
 
     // Create histograms
     int nbins = 2 * Constants::ChannelsCount;
-    double plane_size_x = fMapping->GetPlaneSize(m_name_plane_x);
-    double plane_size_y = fMapping->GetPlaneSize(m_name_plane_y);
+    double plane_size_x = m_mapping->GetPlaneSize(m_name_plane_x);
+    double plane_size_y = m_mapping->GetPlaneSize(m_name_plane_y);
     m_h1d_cluster_count = new TH1F("gem_clust_count", "Number of clusters in event", 10, -0.5, 9.5);
     m_h1d_cluster_pos_x = new TH1F("gem_clust_pos_x", "Reconstructed clusters for plane X", 100, -plane_size_x, plane_size_x);
     m_h1d_cluster_pos_y = new TH1F("gem_clust_pos_y", "Reconstructed clusters for plane Y", 100, -plane_size_y, plane_size_y);
@@ -89,9 +89,14 @@ void ml4fpga::gem::GemReconDqmProcessor::Init() {
 void ml4fpga::gem::GemReconDqmProcessor::Process(const std::shared_ptr<const JEvent> &event) {
     m_log->debug(" new event");
     try {
-        fMapping = GemMapping::GetInstance();
+        // We use this m_total_event_num because when there are several files of the same accelerator-run
+        // we have the same event numbers and have memory leaks with histograms having the same names
+        m_total_event_num++;
 
-        bool should_fill_event = m_dqm_service->ShouldProcessEvent(event->GetEventNumber());
+        // Get mapping
+        m_mapping = GemMapping::GetInstance();
+
+        bool should_fill_event = m_dqm_service->ShouldProcessEvent(m_total_event_num);
 
         if(!should_fill_event) {
             return;
@@ -118,13 +123,17 @@ void ml4fpga::gem::GemReconDqmProcessor::Process(const std::shared_ptr<const JEv
 
         // TimeBinData
         FillIntegralTimePeakData(event);
+
+        // TimeBinData
+        FillSampleData(event);
     }
     catch (std::exception &exp) {
         std::string no_factory_message = "Could not find JFactoryT<DGEMSRSWindowRawData>";
         if (std::string(exp.what()).find(no_factory_message) != std::string::npos) {
             // The first events might be some technical data and maybe DGEMSRSWindowRawData is not yet there so
             // we skip this. For later events we make it a warning
-            std::string log_message = fmt::format(no_factory_message + " at event {}", event->GetEventNumber());
+            std::string log_message = fmt::format("{} at event={} total_event_num={}",
+                                                  no_factory_message, event->GetEventNumber(), m_total_event_num);
             if(event->GetEventNumber() < 10) {
                 m_log->debug(log_message);
             } else {
@@ -150,8 +159,8 @@ void ml4fpga::gem::GemReconDqmProcessor::FillEventRawData(const std::shared_ptr<
 
     // Get data
     auto srs_data = event->Get<DGEMSRSWindowRawData>();
-    auto hists_dir = m_dqm_service->GetPerEventSubDir(event->GetEventNumber(), "gem_raw");
-    uint64_t event_number = event->GetEventNumber();
+    auto hists_dir = m_dqm_service->GetPerEventSubDir(m_total_event_num, "gem_raw");
+    uint64_t event_number = m_total_event_num;
 
     // check srs data is not empty and there are samples
     if(srs_data.size() == 0 || srs_data[0]->samples.size() == 0) {
@@ -165,7 +174,7 @@ void ml4fpga::gem::GemReconDqmProcessor::FillEventRawData(const std::shared_ptr<
     // Sometimes there is no last sample. We NEED it to be coherent. Check, warn and skip if there are problems
     for(auto srs_item: srs_data) {
         if (samples_size != srs_item->samples.size()) {
-            m_log->warn("samples_size_0 = {} != srs_item->samples.size() = {} at event# = {}", samples_size,  srs_item->samples.size(), event->GetEventNumber());
+            m_log->warn("samples_size_0 = {} != srs_item->samples.size() = {} at event# = {} m_total_event_num={}", samples_size,  srs_item->samples.size(), event->GetEventNumber(), m_total_event_num);
             return;
         }
     }
@@ -211,7 +220,7 @@ void ml4fpga::gem::GemReconDqmProcessor::FillEventRawData(const std::shared_ptr<
             auto samples = channel_pair.second;
             // go over samples
             for(size_t sample_i=0; sample_i < samples.size(); sample_i++){
-                int bin_index = sample_i*128 + sample_i + fMapping->APVchannelCorrection(apv_channel);  // + sample_i to make gaps in between samples
+                int bin_index = sample_i*128 + sample_i + m_mapping->APVchannelCorrection(apv_channel);  // + sample_i to make gaps in between samples
                 histo->SetBinContent(bin_index, samples[sample_i]);
             }
         }
@@ -224,8 +233,8 @@ void ml4fpga::gem::GemReconDqmProcessor::FillEventRawData(const std::shared_ptr<
 void ml4fpga::gem::GemReconDqmProcessor::FillApvDecodedData(const std::shared_ptr<const JEvent> &event) {
 
 
-    auto  hists_dir = m_dqm_service->GetPerEventSubDir(event->GetEventNumber(), "gem_apv");
-    uint64_t event_number = event->GetEventNumber();
+    auto  hists_dir = m_dqm_service->GetPerEventSubDir(m_total_event_num, "gem_apv");
+    uint64_t event_number = m_total_event_num;
 
     // Data decoded for each APV
     auto data = event->GetSingle<ApvDecodedData>();
@@ -249,7 +258,7 @@ void ml4fpga::gem::GemReconDqmProcessor::FillApvDecodedData(const std::shared_pt
         }
 
         size_t nbins = timebins.size() * 128 + (timebins.size()-1);
-        auto apv_name = fmt::format("apv_{}_{}", apv_id,  fMapping->GetPlaneFromAPVID(apv_id));
+        auto apv_name = fmt::format("apv_{}_{}", apv_id,  m_mapping->GetPlaneFromAPVID(apv_id));
 
         // Crate DATA histogram
         std::string histo_name = fmt::format("{}_data", apv_name);
@@ -351,9 +360,9 @@ void ml4fpga::gem::GemReconDqmProcessor::FillEventPlaneData(const std::shared_pt
 
     // Get data
     auto data = event->GetSingle<PlaneDecodedData>();
-    auto events_dir = m_dqm_service->GetPerEventSubDir(event->GetEventNumber(), "gem_plane");
+    auto events_dir = m_dqm_service->GetPerEventSubDir(m_total_event_num, "gem_plane");
     auto integral_dir = m_dqm_service->GetIntegralSubDir("gem_plane");
-    auto event_number = event->GetEventNumber();
+    auto event_number = m_total_event_num;
 
     std::unordered_map<std::string, TH1F*> event_data_histos_by_plane;
     std::unordered_map<std::string, TH1F*> event_noise_histos_by_plane;
@@ -587,11 +596,56 @@ void ml4fpga::gem::GemReconDqmProcessor::FillIntegralPeaks(const std::shared_ptr
         }
     }
 
-    double plane_size_x = fMapping->GetPlaneSize(m_name_plane_x);
-    double plane_size_y = fMapping->GetPlaneSize(m_name_plane_y);
+    double plane_size_x = m_mapping->GetPlaneSize(m_name_plane_x);
+    double plane_size_y = m_mapping->GetPlaneSize(m_name_plane_y);
 }
 
 
 void ml4fpga::gem::GemReconDqmProcessor::FillIntegralTimePeakData(const std::shared_ptr<const JEvent>& event) {
-    // auto pf_result = event->GetSingle<SampleData>();
+    // auto pf_result =
+}
+
+void ml4fpga::gem::GemReconDqmProcessor::FillSampleData(const std::shared_ptr<const JEvent> &event) {
+
+    // The trick is that SampleData is guaranteed to be ordered by
+    // detector -> plane -> time bin -> apv on plane -> channel num
+    auto samples = event->Get<SampleData>();
+
+    // Select samples by plane, the second map saves sorting in order apv
+    std::unordered_map<uint64_t, std::map<uint64_t, const SampleData*>> m_samples_by_plane;
+    for(auto sample: samples) {
+        m_samples_by_plane[sample->plane][sample->id] = sample;
+    }
+
+    // Build plots for each plane:
+    for(auto & [plane_id, plane_samples_map]: m_samples_by_plane) {
+        auto plane_name = m_mapping->GetPlaneFromPlaneID(plane_id);
+
+        std::string histo_name = fmt::format("{}_samples", plane_name);
+        std::string histo_title = fmt::format("{} Sample data for event {}", plane_name, m_total_event_num);
+
+    }
+
+
+
+    //auto hists_dir = m_dqm_service->GetPerEventSubDir(m_total_event_num, "gem_raw");
+
+    //auto event_data_histo = new TH1F(histo_name.c_str(), histo_title.c_str(), nbins, -0.5, nbins - 0.5);
+    //auto event_noise_histo = new TH1F(("noise_" + histo_name).c_str(), histo_title.c_str(), nbins, -0.5, nbins - 0.5);
+
+
+    // Fill the histogram
+    // for(size_t time_i=0; time_i < time_frame_count; time_i++) {
+    //     for(size_t adc_i=0; adc_i < adc_count; adc_i++) {
+    //         int index = adc_count * time_i + adc_i;
+    //         event_data_histo->SetBinContent(index, plane_data.data[time_i][adc_i]);
+    //         event_noise_histo->SetBinContent(index, plane_data.PedestalNoises[adc_i]);
+    //         integral_1d_histo->AddBinContent(index, plane_data.data[time_i][adc_i]);
+    //         integral_2d_histo->Fill(adc_i, plane_data.data[time_i][adc_i]);
+    //     }
+    //
+    //     if(time_i > 0) {
+    //         event_data_histo->SetBinContent(adc_count * time_i, 0);
+    //     }
+    // }
 }

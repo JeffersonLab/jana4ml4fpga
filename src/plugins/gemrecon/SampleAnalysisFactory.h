@@ -25,19 +25,30 @@ namespace ml4fpga::gem {
         void CozyProcess(uint64_t run_number, uint64_t event_number) override;
 
 
+    private:
+
         Input<DGEMSRSWindowRawData> m_srs_raw_data {this};
         Output<SampleData> m_output {this};
         Service<GemMappingService> m_mapping_service {this};
+
+        /// User asserted number of timbe-bins
         int m_req_ntsamples;                        // Number of time samples set in flag
+
+        /// Gem mapping (gem configuration)
         GemMapping* m_mapping;
-        std::map<int, std::string> m_apv_id_names_map;
-        //Output<FpgaTrackFit> m_output_trak_fit {this};
 
-    private:
+        /// Map of {key:apv-id, value:apv-name}
+        std::map<int, std::string> m_apv_names_by_id;
 
-        size_t m_cfg_fpga_max_hits = 50;   // Max hits to be sent to FPGA
+        /// True = filtration flag is set by channel n*sigma, fixed threshold otherwise
+        bool m_filter_by_sigma = true;
+
         Parameter<std::string> m_cfg_host {this, "host", "localhost", "Host address to connect to"};
-        Parameter<size_t> m_rolling_len {this, "roll_stat_len", 500, "Rolling average and sigma length for each sample"};
+        Parameter<size_t> m_rolling_len {this, "stat_len", 500, "Rolling average and sigma length for each sample"};
+        Parameter<std::string> m_filter_algo_name {this, "filter_algo", "sigma", "'sigma' - filter by x*sigma, 'trheshold' filter by fixed threshold"};
+        Parameter<double> m_filter_sigmas {this, "filter_sigmas", 3, "Sets X*sigmas for sample filtration. Works only if filter_algo=='sigma'"};
+        Parameter<double> m_filter_threshold {this, "filter_threshold", 3, "Sets X*sigmas for sample filtration. Works only if filter_algo=='threshold'"};
+
 
         std::map<uint64_t, extmath::RollingStatistics<double>> m_sample_stats;
 

@@ -22,6 +22,9 @@
 #include <plugins/gemrecon/Constants.h>
 
 #include "plugins/fpgacon/F125Cluster.h"
+#include "plugins/fpgacon/FpgaHitsToTrack.h"
+#include "plugins/fpgacon/FpgaTrackFit.h"
+#include "plugins/gemrecon/SampleData.h"
 
 //------------------
 // OccupancyAnalysis (Constructor)
@@ -62,6 +65,10 @@ void FlatTreeWriterProcessor::Init() {
         m_ios.push_back(m_gem_scluster_io);
         m_ios.push_back(m_srs_prerecon_io);
         m_ios.push_back(m_gem_peak_io);
+        m_ios.push_back(m_gem_sample_data_io);
+        m_ios.push_back(m_fpga_f125_cluster_io);
+        m_ios.push_back(m_fpga_hits_to_track_io);
+        m_ios.push_back(m_fpga_track_fit_io);
         mEventTree->SetDirectory(m_main_dir);
 
         for(auto &io: m_ios) {
@@ -106,52 +113,56 @@ void FlatTreeWriterProcessor::Process(const std::shared_ptr<const JEvent> &event
             }
         }
 
-        bool has_srs_raw_window_data = false;
-        bool has_gem_reconstruction = false;
-        bool has_f125_reconstruction = false;
+        bool has_srs_window_raw_data = false;
+        bool has_f125_pulse_data = false;
+        bool has_f250_pulse_data = false;
+        bool has_f250_window_raw_data = false;
+        bool has_f125_window_raw_data = false;
 
-        // What factories do we have?
+
+        // PASS 1 GO OVER EVIO DATA
         for (auto factory: event->GetFactorySet()->GetAllFactories()) {
             const std::string &obj_name = factory->GetObjectName();
             auto obj_num = factory->GetNumObjects();
-            const std::string jana_demangle = JTypeInfo::demangle<ml4fpga::fpgacon::F125Cluster>();
 
-            // Df125Config
-            if(obj_name == "Df125Config" && obj_num > 0) {
-
-
+            if(JTypeInfo::demangle<Df125FDCPulse>() == obj_name && obj_num > 0) {
+                SaveF125FDCPulse(event->Get<Df125FDCPulse>());
+                has_f125_pulse_data = true;
             }
+
+            if(JTypeInfo::demangle<Df250PulseData>() == obj_name && obj_num > 0) {
+                SaveF250FDCPulse(event->Get<Df250PulseData>());
+                has_f250_pulse_data = true;
+            }
+
+            if(JTypeInfo::demangle<Df125WindowRawData>() == obj_name && obj_num > 0) {
+                SaveF125WindowRawData(event->Get<Df125WindowRawData>());
+                has_f125_window_raw_data = true;
+            }
+
+            if(JTypeInfo::demangle<Df250WindowRawData>() == obj_name && obj_num > 0) {
+                SaveF250WindowRawData(event->Get<Df250WindowRawData>());
+                has_f250_window_raw_data = true;
+            }
+
+            if(JTypeInfo::demangle<DGEMSRSWindowRawData>() == obj_name && obj_num > 0) {
+                SaveGEMSRSWindowRawData(event->Get<DGEMSRSWindowRawData>());
+                has_srs_window_raw_data = true;
+            }
+        }
+
+        // GO OVER FACTORY GENERATED DATA
+        for (auto factory: event->GetFactorySet()->GetAllFactories()) {
+            const std::string &obj_name = factory->GetObjectName();
+            const std::string jana_demangle = JTypeInfo::demangle<ml4fpga::fpgacon::F125Cluster>();
 
             if(obj_name == jana_demangle && event->GetEventNumber() > 4) {
                 auto f125_clusters = event->Get<ml4fpga::fpgacon::F125Cluster>();
                 logger()->trace("has F125Cluster");
             }
 
-            if(obj_name == "Df125FDCPulse" && obj_num > 0) {
-                auto f125_pulse_records = event->Get<Df125FDCPulse>();
-                SaveF125FDCPulse(f125_pulse_records);
-            }
-
-            if(obj_name == "Df250PulseData" && obj_num > 0) {
-                auto f250_pulse_records = event->Get<Df250PulseData>();
-                SaveF250FDCPulse(f250_pulse_records);
-            }
-
-            if(obj_name == "Df125WindowRawData" && obj_num > 0) {
-                auto f125_wraw_records = event->Get<Df125WindowRawData>();
-                SaveF125WindowRawData(f125_wraw_records);
-            }
-
-            if(obj_name == "Df250WindowRawData" && obj_num > 0) {
-                auto f250_wraw_records = event->Get<Df250WindowRawData>();
-                SaveF250WindowRawData(f250_wraw_records);
-            }
-
-            if(obj_name == "DGEMSRSWindowRawData" && obj_num > 0) {
-                auto srs_data = event->Get<DGEMSRSWindowRawData>();
-                SaveGEMSRSWindowRawData(srs_data);
-                has_srs_raw_window_data = true;
-
+            // PLUGIN 'gemrecon` data
+            if(has_srs_window_raw_data && obj_name == JTypeInfo::demangle<ml4fpga::gem::PlanePeak>()) {
                 try
                 {
                     // TODO fix it and check for factory
@@ -161,11 +172,28 @@ void FlatTreeWriterProcessor::Process(const std::shared_ptr<const JEvent> &event
                     SaveGEMDecodedData(plane_decoded_data);
                     auto peaks = event->Get<ml4fpga::gem::PlanePeak>();
                     SaveGEMPlanePeak(peaks);
+                    auto samples = event->Get<ml4fpga::gem::SampleData>();
+                    SaveGEMSampleData(samples);
                 }
-                catch(std::exception ex) {
-                    //m_log->error("event->Get<SFclust>() problem: {}", ex.what());
-                    // It will fail without gemrecon plugin
-                    // TODO fix it fix it fix it !!!!111oneone
+                catch(std::exception& ex) {
+                    m_log->error("Problem saving gemercon data problem: {}", ex.what());
+                }
+            }
+
+            // PLUGIN 'fpgacon` data
+            if(has_f125_window_raw_data && obj_name == JTypeInfo::demangle<ml4fpga::fpgacon::F125Cluster>()) {
+                try
+                {
+                    // TODO fix it and check for factory
+                    auto clusters = event->Get<ml4fpga::fpgacon::F125Cluster>();
+                    SaveFPGAClusters(clusters);
+                    auto hit_track_assocs = event->Get<ml4fpga::fpgacon::FpgaHitsToTrack>();
+                    SaveFPGAHitsToTracks(hit_track_assocs);
+                    auto track_fits = event->Get<ml4fpga::fpgacon::FpgaTrackFit>();
+                    SaveFPGATrackFits(track_fits);
+                }
+                catch(std::exception& ex) {
+                    m_log->error("Problem saving fpgacon data problem: {}", ex.what());
                 }
             }
         }
@@ -342,7 +370,6 @@ void FlatTreeWriterProcessor::SaveGEMSimpleClusters(std::vector<const ml4fpga::g
         flatio::GemSimpleCluster cluster_save;
         cluster_save.x = cluster->pos_x;
         cluster_save.y = cluster->pos_y;
-
         cluster_save.energy = cluster->energy;
         cluster_save.adc = cluster->amplitude;
         m_gem_scluster_io.add(cluster_save);
@@ -379,5 +406,64 @@ void FlatTreeWriterProcessor::SaveGEMPlanePeak(const std::vector<const ml4fpga::
         m_gem_peak_io.add(save_peak);
     }
 }
+
+void FlatTreeWriterProcessor::SaveGEMSampleData(const std::vector<const ml4fpga::gem::SampleData *> &samples) {
+    for(const auto sample:samples) {
+        flatio::GemSampleData sample_save;
+        sample_save.id = sample->id;
+        sample_save.channel = sample->channel;
+        sample_save.raw_channel = sample->raw_channel;
+        sample_save.time_bin = sample->time_bin;
+        sample_save.apv = sample->apv;
+        sample_save.plane = sample->plane;
+        sample_save.detector = sample->detector;
+        sample_save.is_noise = sample->is_noise;
+        sample_save.value = sample->value;
+        sample_save.raw_value = sample->raw_value;
+        sample_save.rolling_average = sample->rolling_average;
+        sample_save.rolling_std = sample->rolling_std;
+        m_gem_sample_data_io.add(sample_save);
+    }
+}
+
+void FlatTreeWriterProcessor::SaveFPGAClusters(const std::vector<const ml4fpga::fpgacon::F125Cluster *> &clusters) {
+    for(const auto cluster: clusters) {
+        flatio::FpgaF125Cluster cluster_save;
+        cluster_save.id = cluster->id;
+        cluster_save.pos_x = cluster->pos_x;
+        cluster_save.pos_y = cluster->pos_y;
+        cluster_save.pos_z = cluster->pos_z;
+        cluster_save.dedx = cluster->dedx;
+        cluster_save.size = cluster->size;
+        cluster_save.width_y1 = cluster->width[0];
+        cluster_save.width_y2 = cluster->width[1];
+        cluster_save.width_dy = cluster->width[2];
+        cluster_save.length_x1 = cluster->length[0];
+        cluster_save.length_x2 = cluster->length[1];
+        cluster_save.length_dx = cluster->length[2];
+        m_fpga_f125_cluster_io.add(cluster_save);
+    }
+}
+
+void FlatTreeWriterProcessor::SaveFPGAHitsToTracks(const std::vector<const ml4fpga::fpgacon::FpgaHitsToTrack *> &ht_assocs) {
+    for(const auto hit_track_assoc: ht_assocs) {
+        flatio::FpgaHitToTrack ht_save;
+        ht_save.hit_index = hit_track_assoc->hit_index;
+        ht_save.track_index = hit_track_assoc->track_index;
+        m_fpga_hits_to_track_io.add(ht_save);
+    }
+}
+
+void FlatTreeWriterProcessor::SaveFPGATrackFits(const std::vector<const ml4fpga::fpgacon::FpgaTrackFit *> &tfits) {
+    for(const auto tfit: tfits) {
+        flatio::FpgaTrackFit trk_fit_save;
+        trk_fit_save.id = tfit->track_id;
+        trk_fit_save.slope = tfit->slope;
+        trk_fit_save.intersect = tfit->intersect;
+        m_fpga_track_fit_io.add(trk_fit_save);
+    }
+}
+
+
 
 

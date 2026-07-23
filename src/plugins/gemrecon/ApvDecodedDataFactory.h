@@ -32,6 +32,7 @@ namespace ml4fpga::gem {
             std::string fIsHitPeakOrSumADCs = "peakADCs";
             std::string fIsCentralOrAllStripsADCs = "centralStripADCs";
         GemMapping *m_mapping;
+        int m_bad_apv_warns = 0;    /// Limits malformed-APV warning printouts
     };
 } // namespace ml4fpga::gem
 

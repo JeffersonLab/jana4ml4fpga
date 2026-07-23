@@ -1,0 +1,11 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="gluon200-gemrecon" type="CMakeRunConfiguration" factoryName="Application" PROGRAM_PARAMS="-Pplugins=CDAQfile,flat_tree,root_output,gemrecon,dqm, -Pjana:nevents=800 -Pdaq:srs_window_raw:ntsamples=3 -Pjana:debug_plugin_loading=1 -Pgemrecon:LogLevel=info -Pgemrecon:mapping=db/2023_fermi_SRSmap1.cfg -Phistsfile=ROOT/Run_003200.root DATA/hd_rawdata_003200_000.evio" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" WORKING_DIR="file://$ProjectFileDir$/scripts" PASS_PARENT_ENVS_2="true" PROJECT_NAME="JANA4ML4FPGA" TARGET_NAME="jana4ml4fpga" CONFIG_NAME="Debug-Docker ml4fpga" RUN_TARGET_PROJECT_NAME="JANA4ML4FPGA" RUN_TARGET_NAME="jana4ml4fpga">
+    <envs>
+      <env name="JANA_PLUGIN_PATH" value="$USER_HOME$/soft_ml4fpga_MAIN/jana4ml4fpga/jana4ml4fpga-main/install/plugins/" />
+    </envs>
+    <method v="2">
+      <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      <option name="CMake.Install" enabled="true" />
+    </method>
+  </configuration>
+</component>

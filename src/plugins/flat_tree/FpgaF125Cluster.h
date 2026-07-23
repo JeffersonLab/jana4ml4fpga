@@ -7,7 +7,7 @@
 #include "AlignedArraysIO.h"
 
 namespace flatio {
-    struct F125Cluster
+    struct FpgaF125Cluster
     {
 
         uint32_t id;
@@ -24,25 +24,25 @@ namespace flatio {
         float length_dx;
     };
     
-    class F125ClusterIO: public AlignedArraysIO
+    class FpgaF125ClusterIO: public AlignedArraysIO
     {
     public:
         void bindToTree(TTree *tree) override {
             m_is_bound = true;
-            tree->Branch("f125_cluster_count", &m_count, "f125_cluster_count/l");
+            tree->Branch("fpga_f125_cluster_count", &m_count, "fpga_f125_cluster_count/l");
 
-            tree->Branch("f125_cluster_id", &m_vect_id);
-            tree->Branch("f125_cluster_pos_x", &m_vect_pos_x);
-            tree->Branch("f125_cluster_pos_y", &m_vect_pos_y);
-            tree->Branch("f125_cluster_pos_z", &m_vect_pos_z);
-            tree->Branch("f125_cluster_dedx", &m_vect_dedx);
-            tree->Branch("f125_cluster_size", &m_vect_size);
-            tree->Branch("f125_cluster_width_y1", &m_vect_width_y1);
-            tree->Branch("f125_cluster_width_y2", &m_vect_width_y2);
-            tree->Branch("f125_cluster_width_dy", &m_vect_width_dy);
-            tree->Branch("f125_cluster_length_x1", &m_vect_length_x1);
-            tree->Branch("f125_cluster_length_x2", &m_vect_length_x2);
-            tree->Branch("f125_cluster_length_dx", &m_vect_length_dx);
+            tree->Branch("fpga_f125_cluster_id", &m_vect_id);
+            tree->Branch("fpga_f125_cluster_pos_x", &m_vect_pos_x);
+            tree->Branch("fpga_f125_cluster_pos_y", &m_vect_pos_y);
+            tree->Branch("fpga_f125_cluster_pos_z", &m_vect_pos_z);
+            tree->Branch("fpga_f125_cluster_dedx", &m_vect_dedx);
+            tree->Branch("fpga_f125_cluster_size", &m_vect_size);
+            tree->Branch("fpga_f125_cluster_width_y1", &m_vect_width_y1);
+            tree->Branch("fpga_f125_cluster_width_y2", &m_vect_width_y2);
+            tree->Branch("fpga_f125_cluster_width_dy", &m_vect_width_dy);
+            tree->Branch("fpga_f125_cluster_length_x1", &m_vect_length_x1);
+            tree->Branch("fpga_f125_cluster_length_x2", &m_vect_length_x2);
+            tree->Branch("fpga_f125_cluster_length_dx", &m_vect_length_dx);
         }
 
         void clear() override {
@@ -62,9 +62,9 @@ namespace flatio {
             m_vect_length_dx.clear();
         }
         
-        void add(const F125Cluster& data) {
+        void add(const FpgaF125Cluster& data) {
             if(!m_is_bound) {
-                throw std::logic_error("Can't add F125Cluster data because F125ClusterIO is not bound to tree");
+                throw std::logic_error("Can't add FpgaF125Cluster data because FpgaF125ClusterIO is not bound to tree");
             }
             m_count++;
 

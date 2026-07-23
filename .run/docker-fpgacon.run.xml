@@ -1,0 +1,11 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="docker-fpgacon" type="CMakeRunConfiguration" factoryName="Application" PROGRAM_PARAMS="-Pplugins=CDAQfile,flat_tree,root_output,gemrecon,dqm,fpgacon -Ppjana:nevents=1 -Ppjana:nskip=0 -Pjana:nevents=50 -Pjana:debug_plugin_loading=1 -Pjana:timeout=0 -Pdqm:min_event=3 -Pdaq:srs_window_raw:ntsamples=6 -Pevio:LogLevel=trace -Pgemrecon:LogLevel=info -Pgemrecon:ClusterF:LogLevel=info -Pgemrecon:mapping=/tmp/JANA4ML4FPGA/scripts/db/2023_mapping_fermilab3.cfg -Pfpgacon:fpga:port=4340 -Phistsfile=/mnt/data/003200_v30_hists.root /mnt/data/hd_rawdata_003200_000.evio" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="JANA4ML4FPGA" TARGET_NAME="jana4ml4fpga" CONFIG_NAME="Debug-Docker ml4fpga" RUN_TARGET_PROJECT_NAME="JANA4ML4FPGA" RUN_TARGET_NAME="jana4ml4fpga">
+    <envs>
+      <env name="JANA_PLUGIN_PATH" value="/tmp/JANA4ML4FPGA/install/plugins/:$JANA_PLUGIN_PATH" />
+    </envs>
+    <method v="2">
+      <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      <option name="CMake.Install" enabled="true" />
+    </method>
+  </configuration>
+</component>

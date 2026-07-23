@@ -12,7 +12,9 @@
 #include <TF1.h>
 #include <rawdataparser/Df125WindowRawData.h>
 
+#include "FpgaExchangeTimeInfo.h"
 #include "services/dqm/DataQualityMonitorService.h"
+#include "FpgaExchangeTimeInfo.h"
 
 class JEvent;
 class JApplication;
@@ -51,6 +53,9 @@ public:
     // Only one thread will call this.
     void Finish() override;
 
+
+
+
 private:
 
     /// Directory to store histograms to
@@ -58,5 +63,20 @@ private:
     std::shared_ptr<DataQualityMonitorService> m_dqm_service;
 
     float m_cfg_min_clust_size=10;
+
+    // We use this m_total_event_num because when there are several files of the same accelerator-run
+    // we have the same event numbers and have memory leaks with histograms having the same names
+    uint64_t m_total_event_num = 0;
+
+    void ProcessTimeInfo(const ml4fpga::fpgacon::FpgaExchangeTimeInfo* time_info);
+
+    TH1F *m_h1d_timing_event_cpu_time     = nullptr;
+    TH1F *m_h1d_timing_event_real_time    = nullptr;
+    TH1F *m_h1d_timing_send_cpu_time      = nullptr;
+    TH1F *m_h1d_timing_send_real_time     = nullptr;
+    TH1F *m_h1d_timing_receive1_cpu_time  = nullptr;
+    TH1F *m_h1d_timing_receive1_real_time = nullptr;
+    TH1F *m_h1d_timing_receive2_cpu_time  = nullptr;
+    TH1F *m_h1d_timing_receive2_real_time = nullptr;
 };
 
