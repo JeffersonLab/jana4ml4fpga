@@ -76,6 +76,29 @@ else()
         file(WRITE ${JANA2_SOURCE_DIR}/src/plugins/CMakeLists.txt "${_jana2_plugins_cml}")
     endif()
 
+    # Patch: "ClearOutputs" - move JEvent::Clear() (per-event object recycling,
+    # thousands of deallocations for raw EVIO events) out from under the
+    # JExecutionEngine mutex, which otherwise serializes every worker through
+    # recycling. ~2x readout throughput; not yet upstream. This is the SAME patch
+    # the docker image applies (cmake/patches/jana2-master-clearoutputs.patch), so
+    # every build path - install_conda, plain cmake, docker - gets it.
+    # Idempotent: applied only when the source does not already contain it.
+    file(READ ${JANA2_SOURCE_DIR}/src/libraries/JANA/Topology/JArrow.h _jana2_jarrow_h)
+    if(NOT _jana2_jarrow_h MATCHES "ClearOutputs")
+        find_package(Git QUIET)
+        if(NOT GIT_EXECUTABLE)
+            set(GIT_EXECUTABLE git)
+        endif()
+        set(_clearoutputs_patch ${CMAKE_SOURCE_DIR}/cmake/patches/jana2-master-clearoutputs.patch)
+        message(STATUS "${CMAKE_PROJECT_NAME}: applying JANA2 ClearOutputs patch")
+        execute_process(
+                COMMAND ${GIT_EXECUTABLE} -C ${JANA2_SOURCE_DIR} apply ${_clearoutputs_patch}
+                RESULT_VARIABLE _clearoutputs_result)
+        if(_clearoutputs_result)
+            message(FATAL_ERROR "Failed to apply ClearOutputs patch: ${_clearoutputs_patch}")
+        endif()
+    endif()
+
     # Configure, build and install JANA2 (only once; skipped if already installed)
     if(NOT EXISTS ${JANA2_INSTALL_DIR}/lib/JANA/cmake/JANAConfig.cmake
        AND NOT EXISTS ${JANA2_INSTALL_DIR}/lib/cmake/JANA/JANAConfig.cmake)

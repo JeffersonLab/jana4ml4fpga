@@ -50,7 +50,10 @@ ENV JANA2_SRC_PATH=${APP_ROOT}/jana4ml4fpga-jana2-src \
 
 # NOTE: build context MUST be the repo root (see header) so the COPY of the
 # project sources below works; the patch therefore needs its full repo path here.
-COPY docker/jana4ml4fpga/jana2-master-clearoutputs.patch /tmp/jana2-master-clearoutputs.patch
+# Canonical patch lives in cmake/patches/ and is the SAME one that
+# cmake/fetch_dependencies.cmake applies for non-docker builds (install_conda,
+# plain cmake) - one source of truth for all build paths.
+COPY cmake/patches/jana2-master-clearoutputs.patch /tmp/jana2-master-clearoutputs.patch
 
 RUN set -ex && \
     git clone https://github.com/JeffersonLab/JANA2.git "${JANA2_SRC_PATH}" && \
