@@ -4,7 +4,7 @@
 # (system package, conda, or sourced thisroot.sh).
 #
 # JANA2 is built the same way the docker images build it (see docker/ml4fpga-pre):
-#   -DUSE_ROOT=On -DUSE_PODIO=Off -DUSE_ZEROMQ=On
+#   -DUSE_ROOT=On -DUSE_PODIO=Off -DUSE_ZEROMQ=Off
 # Because this project consumes JANA2 through its installed JANAConfig.cmake
 # (JANA_DIR, JANA_INCLUDE_DIR, JANA_LIB, ...), JANA2 is configured, built and
 # installed into ${CMAKE_BINARY_DIR}/deps/jana2 at configure time, and then the
@@ -45,7 +45,7 @@ find_package(JANA QUIET)
 if(JANA_FOUND)
     message(STATUS "${CMAKE_PROJECT_NAME}: JANA2 found: ${JANA_DIR}")
 else()
-    set(JANA2_VERSION "v2.1.2" CACHE STRING "JANA2 git tag to fetch and build")
+    set(JANA2_VERSION "f815961e" CACHE STRING "JANA2 git tag/SHA to fetch and build (master @ v2026.03.00 + gcc16 tomlplusplus fix)")
     set(JANA2_SOURCE_DIR ${CMAKE_BINARY_DIR}/deps/jana2-src)
     set(JANA2_BUILD_DIR ${CMAKE_BINARY_DIR}/deps/jana2-build)
     set(JANA2_INSTALL_DIR ${CMAKE_BINARY_DIR}/deps/jana2)
@@ -57,7 +57,7 @@ else()
     FetchContent_Populate(jana2_download
             GIT_REPOSITORY https://github.com/JeffersonLab/JANA2.git
             GIT_TAG ${JANA2_VERSION}
-            GIT_SHALLOW TRUE
+            GIT_SHALLOW FALSE  # SHA pins cannot be fetched shallowly
             SOURCE_DIR ${JANA2_SOURCE_DIR}
             BINARY_DIR ${CMAKE_BINARY_DIR}/deps/jana2-populate-bin
             SUBBUILD_DIR ${CMAKE_BINARY_DIR}/deps/jana2-populate-subbuild)
@@ -76,6 +76,29 @@ else()
         file(WRITE ${JANA2_SOURCE_DIR}/src/plugins/CMakeLists.txt "${_jana2_plugins_cml}")
     endif()
 
+    # Patch: "ClearOutputs" - move JEvent::Clear() (per-event object recycling,
+    # thousands of deallocations for raw EVIO events) out from under the
+    # JExecutionEngine mutex, which otherwise serializes every worker through
+    # recycling. ~2x readout throughput; not yet upstream. This is the SAME patch
+    # the docker image applies (cmake/patches/jana2-master-clearoutputs.patch), so
+    # every build path - install_conda, plain cmake, docker - gets it.
+    # Idempotent: applied only when the source does not already contain it.
+    file(READ ${JANA2_SOURCE_DIR}/src/libraries/JANA/Topology/JArrow.h _jana2_jarrow_h)
+    if(NOT _jana2_jarrow_h MATCHES "ClearOutputs")
+        find_package(Git QUIET)
+        if(NOT GIT_EXECUTABLE)
+            set(GIT_EXECUTABLE git)
+        endif()
+        set(_clearoutputs_patch ${CMAKE_SOURCE_DIR}/cmake/patches/jana2-master-clearoutputs.patch)
+        message(STATUS "${CMAKE_PROJECT_NAME}: applying JANA2 ClearOutputs patch")
+        execute_process(
+                COMMAND ${GIT_EXECUTABLE} -C ${JANA2_SOURCE_DIR} apply ${_clearoutputs_patch}
+                RESULT_VARIABLE _clearoutputs_result)
+        if(_clearoutputs_result)
+            message(FATAL_ERROR "Failed to apply ClearOutputs patch: ${_clearoutputs_patch}")
+        endif()
+    endif()
+
     # Configure, build and install JANA2 (only once; skipped if already installed)
     if(NOT EXISTS ${JANA2_INSTALL_DIR}/lib/JANA/cmake/JANAConfig.cmake
        AND NOT EXISTS ${JANA2_INSTALL_DIR}/lib/cmake/JANA/JANAConfig.cmake)
@@ -92,7 +115,7 @@ else()
                     -DCMAKE_PROJECT_INCLUDE=${CMAKE_SOURCE_DIR}/cmake/vdt_stub.cmake
                     -DUSE_ROOT=On
                     -DUSE_PODIO=Off
-                    -DUSE_ZEROMQ=On
+                    -DUSE_ZEROMQ=Off
                     -DUSE_PYTHON=Off
                 RESULT_VARIABLE JANA2_CONFIGURE_RESULT)
         if(JANA2_CONFIGURE_RESULT)

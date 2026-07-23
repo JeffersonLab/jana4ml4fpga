@@ -3,6 +3,7 @@
 //
 
 #include <rawdataparser/EVIOBlockedEventParser.h>
+#include <services/log/Log_service.h>
 
 #include "CDAQEVIOFileSource.h"
 
@@ -89,7 +90,7 @@ void CDAQEVIOFileSource::GetEvent(std::shared_ptr <JEvent> event) {
 }
 
 void CDAQEVIOFileSource::Open() {
-    InitLogger("CDAQEVIOFileSource");  // init spdlog
+    m_log = GetApplication()->GetService<Log_service>()->logger("evio");
     m_evio_filename = GetResourceName();
     m_log->info("GetResourceName() = {}", m_evio_filename);
     CDAQEVIOFileSource::OpenEVIOFile(m_evio_filename);

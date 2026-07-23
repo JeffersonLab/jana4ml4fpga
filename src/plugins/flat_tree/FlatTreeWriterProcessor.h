@@ -1,12 +1,14 @@
 #pragma once
 
 #include <JANA/JEventProcessor.h>
-#include <JANA/JEventProcessorSequentialRoot.h>
-#include <extensions/spdlog/SpdlogMixin.h>
+#include <JANA/Services/JGlobalRootLock.h>
+#include <memory>
+#include <spdlog/logger.h>
 #include <TDirectory.h>
 #include <TH1F.h>
 #include <TH2F.h>
 #include <TTree.h>
+#include <ROOT/TBufferMerger.hxx>
 #include "SrsRawRecord.h"
 #include "F125FDCPulseRecord.h"
 #include "F125WindowRawRecord.h"
@@ -36,83 +38,110 @@
 class JEvent;
 class JApplication;
 
+namespace flatio {
+
+/// One complete set of tree-writer IO buffers. In multithreaded mode each worker
+/// thread owns one bundle bound to its own (in-memory) tree; in single-thread
+/// (legacy) mode there is exactly one, bound to the tree in the shared hists file.
+struct FlatIoBundle {
+    SrsRawRecordIO m_srs_record_io;
+    F125WindowRawRecordIO m_f125_wraw_io;
+    F250WindowRawRecordIO m_f250_wraw_io;
+    F125FDCPulseRecordIO m_f125_pulse_io;
+    F250FDCPulseRecordIO m_f250_pulse_io;
+    GemSimpleClusterIO m_gem_scluster_io;
+    SrsPreReconRecordIO m_srs_prerecon_io;
+    GemPlanePeakIO m_gem_peak_io;
+    GemSampleDataIO m_gem_sample_data_io;
+    FpgaF125ClusterIO m_fpga_f125_cluster_io;
+    FpgaHitToTrackIO m_fpga_hits_to_track_io;
+    FpgaTrackFitIO m_fpga_track_fit_io;
+
+    /// Event number leaf: with concurrent writers tree entry ORDER is not event
+    /// order - consumers must sort/select by event_number (MT plan, hazard H6).
+    ULong64_t m_event_number = 0;
+
+    std::vector<std::reference_wrapper<AlignedArraysIO>> m_ios;
+
+    FlatIoBundle() {
+        m_ios = {m_srs_record_io,    m_f125_wraw_io,        m_f250_wraw_io,
+                 m_f125_pulse_io,    m_f250_pulse_io,       m_gem_scluster_io,
+                 m_srs_prerecon_io,  m_gem_peak_io,         m_gem_sample_data_io,
+                 m_fpga_f125_cluster_io, m_fpga_hits_to_track_io, m_fpga_track_fit_io};
+    }
+
+    void bindToTree(TTree* tree) {
+        tree->Branch("event_number", &m_event_number, "event_number/l");
+        for (auto& io : m_ios) io.get().bindToTree(tree);
+    }
+
+    void clear() {
+        for (auto& io : m_ios) io.get().clear();
+    }
+};
+
+}  // namespace flatio
+
 class FlatTreeWriterProcessor:
-        public JEventProcessor,
-        public spdlog::extensions::SpdlogMixin<FlatTreeWriterProcessor>   // this automates proper Log initialization
+        public JEventProcessor
 {
 public:
     explicit FlatTreeWriterProcessor(JApplication *);
     ~FlatTreeWriterProcessor() override = default;
 
-    //----------------------------
-    // Init
-    //
-    // This is called once before the first call to the Process method
-    // below. You may, for example, want to open an output file here.
-    // Only one thread will call this.
     void Init() override;
 
-
-    //----------------------------
-    // Process
-    //
-    // This is called for every event. Multiple threads may call this
-    // simultaneously. If you write something to an output file here
-    // then make sure to protect it with a mutex or similar mechanism.
-    // Minimize what is done while locked since that directly affects
-    // the multi-threaded performance.
+    /// Called concurrently from JANA worker threads. In MT mode each thread fills
+    /// its own TBufferMerger tree lock-free; in legacy mode (nthreads==1) the
+    /// single bundle/tree in the shared hists file is used, exactly as before.
     void Process(const std::shared_ptr<const JEvent>& event) override;
 
-    //----------------------------
-    // Finish
-    //
-    // This is called once after all events have been processed. You may,
-    // for example, want to close an output file here.
-    // Only one thread will call this.
     void Finish() override;
 
 private:
+    /// Per-thread writer context (MT mode). file/tree live in the TBufferMerger.
+    struct WriterCtx {
+        std::shared_ptr<ROOT::TBufferMergerFile> file;  // null in legacy mode
+        TTree* tree = nullptr;
+        flatio::FlatIoBundle io;
+        size_t fills_since_flush = 0;
+    };
 
-    // TODO there should be a FlatIO for each worker thread
-    std::recursive_mutex io_mutex;
-    TTree *mEventTree;
-    std::vector<std::reference_wrapper<flatio::AlignedArraysIO>> m_ios;
+    /// Returns this thread's writer context, creating it on first use (MT mode),
+    /// or the single legacy context.
+    WriterCtx& GetCtx();
 
-    flatio::SrsRawRecordIO m_srs_record_io;
-    flatio::F125WindowRawRecordIO m_f125_wraw_io;
-    flatio::F250WindowRawRecordIO m_f250_wraw_io;
-    flatio::F125FDCPulseRecordIO m_f125_pulse_io;
-    flatio::F250FDCPulseRecordIO m_f250_pulse_io;
-    flatio::GemSimpleClusterIO m_gem_scluster_io;
-    flatio::SrsPreReconRecordIO m_srs_prerecon_io;
-    flatio::GemPlanePeakIO m_gem_peak_io;
-    flatio::GemSampleDataIO m_gem_sample_data_io;
-    flatio::FpgaF125ClusterIO m_fpga_f125_cluster_io;
-    flatio::FpgaHitToTrackIO m_fpga_hits_to_track_io;
-    flatio::FpgaTrackFitIO m_fpga_track_fit_io;
+    bool m_mt_mode = false;
+    std::string m_mt_output;          ///< param flat_tree:mt_output ("" = auto name)
+    size_t m_flush_events = 10000;    ///< param flat_tree:flush_events (per thread)
 
+    std::unique_ptr<ROOT::TBufferMerger> m_merger;   // MT mode only
+    std::mutex m_ctx_mutex;
+    std::vector<std::unique_ptr<WriterCtx>> m_contexts;
+
+    WriterCtx* m_legacy_ctx = nullptr;               // legacy mode only
+    TDirectory* m_main_dir = nullptr;                // legacy mode: shared hists file dir
 
     std::shared_ptr<JGlobalRootLock> m_glb_root_lock;
+    std::shared_ptr<spdlog::logger> m_log;   // aspect logger: "out"
 
     uint16_t findBestSrsSamle(std::vector<uint16_t> samples);
 
-    void SaveF125FDCPulse(const std::vector<const Df125FDCPulse *>& records);
-    void SaveF250FDCPulse(const std::vector<const Df250PulseData *>& records);
-    void SaveGEMSRSWindowRawData(std::vector<const DGEMSRSWindowRawData *> records);
-    void SaveF125WindowRawData(std::vector<const Df125WindowRawData *> records);
-    void SaveF250WindowRawData(std::vector<const Df250WindowRawData *> records);
-    void SaveGEMSimpleClusters(std::vector<const ml4fpga::gem::SFclust *> clusters);
-    void SaveFPGAClusters(const std::vector<const ml4fpga::fpgacon::F125Cluster *> & clusters);
-    void SaveFPGAHitsToTracks(const std::vector<const ml4fpga::fpgacon::FpgaHitsToTrack *> & ht_assocs);
-    void SaveFPGATrackFits(const std::vector<const ml4fpga::fpgacon::FpgaTrackFit *> & tfits);
-    void SaveGEMSampleData(const std::vector<const ml4fpga::gem::SampleData *> & samples);
+    void SaveF125FDCPulse(flatio::FlatIoBundle& io, const std::vector<const Df125FDCPulse *>& records);
+    void SaveF250FDCPulse(flatio::FlatIoBundle& io, const std::vector<const Df250PulseData *>& records);
+    void SaveGEMSRSWindowRawData(flatio::FlatIoBundle& io, std::vector<const DGEMSRSWindowRawData *> records);
+    void SaveF125WindowRawData(flatio::FlatIoBundle& io, std::vector<const Df125WindowRawData *> records);
+    void SaveF250WindowRawData(flatio::FlatIoBundle& io, std::vector<const Df250WindowRawData *> records);
+    void SaveGEMSimpleClusters(flatio::FlatIoBundle& io, std::vector<const ml4fpga::gem::SFclust *> clusters);
+    void SaveFPGAClusters(flatio::FlatIoBundle& io, const std::vector<const ml4fpga::fpgacon::F125Cluster *> & clusters);
+    void SaveFPGAHitsToTracks(flatio::FlatIoBundle& io, const std::vector<const ml4fpga::fpgacon::FpgaHitsToTrack *> & ht_assocs);
+    void SaveFPGATrackFits(flatio::FlatIoBundle& io, const std::vector<const ml4fpga::fpgacon::FpgaTrackFit *> & tfits);
+    void SaveGEMSampleData(flatio::FlatIoBundle& io, const std::vector<const ml4fpga::gem::SampleData *> & samples);
+    void SaveGEMDecodedData(flatio::FlatIoBundle& io, const ml4fpga::gem::PlaneDecodedData *data);
+    void SaveGEMPlanePeak(flatio::FlatIoBundle& io, const std::vector<const ml4fpga::gem::PlanePeak *> &peaks);
 
-
-
-//    void SaveGEMDecodedData(const ml4fpga::gem::DecodedData *pData);
-    TDirectory* m_main_dir;
-
-    void SaveGEMDecodedData(const ml4fpga::gem::PlaneDecodedData *data);
-    void SaveGEMPlanePeak(const std::vector<const ml4fpga::gem::PlanePeak *> &peaks);
+    // GEM plane names used for srs_prerecon branches. Shared knob with gemrecon
+    // plugin (same parameter names): -Pgemrecon:plane_name_x/_y
+    std::string m_gem_plane_x = "URWELLX";
+    std::string m_gem_plane_y = "URWELLY";
 };
-

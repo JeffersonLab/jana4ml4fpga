@@ -67,23 +67,12 @@ EVIOBlockedEventParser::~EVIOBlockedEventParser() {
 //-----------------------------------------
 // ParseEVIOBlockedEvent
 ///
-/// This is called when using a JBlockedEventSource which has 
-/// a mechanism for providing the JEventPool object directly.
-//-----------------------------------------
-std::vector<std::shared_ptr<JEvent>>
-EVIOBlockedEventParser::ParseEVIOBlockedEvent(EVIOBlockedEvent &block, JEventPool &pool) {
-    return ParseEVIOBlockedEvent(block, &pool, nullptr);
-}
-
-//-----------------------------------------
-// ParseEVIOBlockedEvent
-///
 /// This is called when using a JEventSource that has been given
 /// a single JEvent object to write the event into.
 //-----------------------------------------
 std::vector<std::shared_ptr<JEvent>>
 EVIOBlockedEventParser::ParseEVIOBlockedEvent(EVIOBlockedEvent &block, std::shared_ptr<JEvent> &preallocated_event) {
-    return ParseEVIOBlockedEvent(block, nullptr, &preallocated_event);
+    return ParseEVIOBlockedEvent(block, &preallocated_event);
 }
 
 //-----------------------------------------
@@ -94,7 +83,7 @@ EVIOBlockedEventParser::ParseEVIOBlockedEvent(EVIOBlockedEvent &block, std::shar
 /// or a vector of preallocated JEvents.
 //-----------------------------------------
 std::vector<std::shared_ptr<JEvent>>
-EVIOBlockedEventParser::ParseEVIOBlockedEvent(EVIOBlockedEvent &block, JEventPool *pool,
+EVIOBlockedEventParser::ParseEVIOBlockedEvent(EVIOBlockedEvent &block,
                                               std::shared_ptr<JEvent> *preallocated_event) {
 
     // Optionally write this to output EVIO file
@@ -141,28 +130,21 @@ EVIOBlockedEventParser::ParseEVIOBlockedEvent(EVIOBlockedEvent &block, JEventPoo
         throw JException(ss.str());
     }
 
-    if (pool) {
-        // Allocate M JEvents from the pool
-        for (uint32_t i = 0; i < M; i++) {
-            auto event = pool->get(0);
-            // event->SetEventNumber()
-            // event->SetEventNumber()
-            event->SetEventNumber(event_num + i); // should be 0 for BOR and EPICS events
-            events.push_back(event);
-        }
-    } else if (preallocated_event) {
-        // Use event that were preallocated by the caller.
+    // MIGRATION note (JANA2 2026.x): the JEventPool allocation path was removed
+    // together with the old pool API. The caller always provides the JEvent now
+    // (per-event sources parse one block into one event; block-batching designs
+    // unpack blocks upstream and call this once per event bank).
+    if (preallocated_event) {
         if (M > 1) {
             _DBG_
                     << " EVIOBlockedEventParser::ParseEVIOBlockedEvent passed single JEvent for block containing more than 1 event!"
                     << std::endl;
             throw JException("Multiple events in block when only single JEvent provided to copy them in to.");
         }
+        (*preallocated_event)->SetEventNumber(event_num); // 0 for BOR and EPICS events
         events.push_back(*preallocated_event);
     } else {
-        _DBG_ << "Neither a JEventPool nor a preallocated_events vector was passed to ParseEVIOBlockedEvent.!"
-              << std::endl;
-        throw JException("No JEvents given to parse EVIOEvnetBlock into!");
+        throw JException("No JEvent given to parse the EVIO event block into!");
     }
     ievent_idx = 0; // start filling events at the beginning
 
@@ -1055,7 +1037,10 @@ void EVIOBlockedEventParser::ParseDGEMSRSBank(uint32_t rocid, uint32_t *&iptr, u
                 // first_header_seen = true;
             } else { // for first APV in event initialize DParsedEvent
                 // pe = *pe_iter++;
-                if (last_word_was_magic_header) ievent++;
+                if (last_word_was_magic_header) {
+                    FlushDGEMSRSWindowRawData(events[ievent].get());
+                    ievent++;
+                }
                 if (ievent >= events.size()) {
                     static std::atomic<int> warn_count{0};
                     if (ShouldWarn(warn_count)) {
@@ -1063,7 +1048,7 @@ void EVIOBlockedEventParser::ParseDGEMSRSBank(uint32_t rocid, uint32_t *&iptr, u
                              << " Skipping rest of bank." << std::endl;
                     }
                     iptr = iend;
-                    return;
+                    return;  // note: accumulator content for the overflow event is dropped with the bank
                 }
             }
 
@@ -1120,18 +1105,20 @@ void EVIOBlockedEventParser::ParseDGEMSRSBank(uint32_t rocid, uint32_t *&iptr, u
         if (iptr >= iend)break; // bulletproof
     }
 
+    FlushDGEMSRSWindowRawData(events[ievent].get());
     iptr = iend;
 }
 
 //-------------------------
 // MakeDGEMSRSWindowRawData
 //-------------------------
+// PERF (readout optimization): rawData16bits passed by const-ref (was by value:
+// ~7.7 KB copied per APV, 12x per event); staging vectors and the heap-allocated
+// per-call channel array removed. Sample values and ordering are bit-identical.
 void EVIOBlockedEventParser::MakeDGEMSRSWindowRawData(JEvent *event, uint32_t rocid, uint32_t slot, uint32_t itrigger,
-                                                      uint32_t apv_id, vector<int> rawData16bits) {
+                                                      uint32_t apv_id, const vector<int> &rawData16bits) {
     int32_t idata = 0, firstdata = 0, lastdata = 0;
     int32_t size = rawData16bits.size();
-    vector<float> rawDataTS, rawDataZS;
-    rawDataTS.clear();
 
     int32_t fAPVHeaderLevel = 1500;
     int32_t fNbOfTimeSamples = m_config.NSAMPLES_GEMSRS; // hard coded maximum number of time samples
@@ -1158,12 +1145,16 @@ void EVIOBlockedEventParser::MakeDGEMSRSWindowRawData(JEvent *event, uint32_t ro
     lastdata = firstdata + NCH;
 
     ///////////////////////////////////////////////////////////////////////
-    // loop over time bins and store samples in map for all APV channels //
+    // loop over time bins and store samples directly in the output objects
     ///////////////////////////////////////////////////////////////////////
-    //vector<uint16_t> windowDataAPV[NCH];
-    std::shared_ptr<vector<uint16_t>[]> sptr_windowDataAPV(new vector<uint16_t>[NCH]);
-    vector<uint16_t> *windowDataAPV = sptr_windowDataAPV.get();
-    //for(int i=0; i<NCH; i++) windowDataAPV[i].resize(fNbOfTimeSamples);
+    std::vector<DGEMSRSWindowRawData *> wrds;
+    wrds.reserve(NCH);
+    for (int ichan = 0; ichan < NCH; ichan++) {
+        uint32_t channel = apv_id * 128 + ichan;
+        auto *windowRawData = new DGEMSRSWindowRawData(rocid, slot, channel, itrigger, apv_id, ichan);
+        windowRawData->samples.reserve(fNbOfTimeSamples);
+        wrds.push_back(windowRawData);
+    }
 
     for (int32_t timebin = 0; timebin < fNbOfTimeSamples; timebin++) {
         // Frames from unexpected/changed data formats can be shorter than
@@ -1179,26 +1170,26 @@ void EVIOBlockedEventParser::MakeDGEMSRSWindowRawData(JEvent *event, uint32_t ro
         }
 
         // EXTRACT APV25 DATA FOR A GIVEN TIME BIN
-        rawDataTS.insert(rawDataTS.end(), &rawData16bits[firstdata], &rawData16bits[lastdata]);
+        // (int -> uint16_t directly; the removed float staging round-trip was exact
+        // for the 16-bit ADC value range, so values are unchanged)
         for (int32_t chNo = 0; chNo < NCH; chNo++) {
-            //windowDataAPV[chNo].at(timebin) = rawDataTS[chNo];
-            windowDataAPV[chNo].push_back(rawDataTS[chNo]);
+            wrds[chNo]->samples.push_back(static_cast<uint16_t>(rawData16bits[firstdata + chNo]));
         }
 
         firstdata = lastdata + 12;
         lastdata = firstdata + NCH;
-        rawDataTS.clear();
     }
 
-    // write sample data to GEMSRS object
-    std::vector<DGEMSRSWindowRawData *> wrds;
-    for (int ichan = 0; ichan < NCH; ichan++) {
-        uint32_t channel = apv_id * 128 + ichan;
-        DGEMSRSWindowRawData *windowRawData = new DGEMSRSWindowRawData(rocid, slot, channel, itrigger, apv_id, ichan);
-        windowRawData->samples = windowDataAPV[ichan];
-        wrds.push_back(windowRawData);
+    // Accumulate; inserted once per event by FlushDGEMSRSWindowRawData()
+    (void)event;
+    m_srs_accumulator.insert(m_srs_accumulator.end(), wrds.begin(), wrds.end());
+}
+
+void EVIOBlockedEventParser::FlushDGEMSRSWindowRawData(JEvent* event) {
+    if (!m_srs_accumulator.empty()) {
+        event->Insert(m_srs_accumulator);
+        m_srs_accumulator.clear();
     }
-    event->Insert(wrds);
 }
 
 //-------------------------

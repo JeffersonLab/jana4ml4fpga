@@ -12,23 +12,21 @@
 
 #include <JANA/JEventSource.h>
 #include <JANA/JEventSourceGeneratorT.h>
-#include <JANA/Compatibility/jerror.h>
 #include <JANA/JApplication.h>
 #include <JANA/JEvent.h>
 #include <JANA/JFactory.h>
-#include <JANA/Compatibility/JStreamLog.h>
 
 #include <evio/HDEVIO.h>
 #include <evio/DModuleType.h>
 #include <rawdataparser/EVIOBlockedEvent.h>
 #include <rawdataparser/EVIOBlockedEventParserConfig.h>
-#include <extensions/spdlog/SpdlogMixin.h>
+#include <memory>
+#include <spdlog/logger.h>
 
 #define DEFAULT_READ_BUFF_LEN 4000000
 
 class CDAQEVIOFileSource :
-        public JEventSource,
-        public spdlog::extensions::SpdlogMixin<CDAQEVIOFileSource> {
+        public JEventSource{
 
 public:
 
@@ -43,6 +41,7 @@ public:
     static std::string GetDescription();
 
 private:
+    std::shared_ptr<spdlog::logger> m_log;   // aspect logger: "evio"
     std::string m_evio_filename = "";
     std::unique_ptr <HDEVIO> m_hdevio;
     EVIOBlockedEventParserConfig m_parser_config;
