@@ -1,0 +1,18 @@
+# Keep the docker/jana4ml4fpga/Dockerfile build context small.
+# (Dockerfile is built with the repo root as context: `docker build -f docker/jana4ml4fpga/Dockerfile .`)
+
+.git/
+build/
+cmake-build-debug/
+install/
+bin/
+include/
+.idea/
+.vscode/
+.claude/
+
+# Local experiment scratch (large, not needed to build the image)
+ai_rework/out/
+ai_rework/fixtures/
+ai_rework/plots/
+ai_rework/plots_before_phase1/
