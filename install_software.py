@@ -23,7 +23,7 @@ Environment variables:
                          it contains CMakeLists.txt, else $TOP_DIR/JANA4ML4FPGA
                          (git-cloned on first build).
     ML4FPGA_BRANCH       branch to clone when the source is fetched. Default: main.
-    ML4FPGA_REPO_URL     repo to clone. Default: JeffersonLab/JANA4ML4FPGA.
+    ML4FPGA_REPO_URL     repo to clone. Default: JeffersonLab/jana4ml4fpga.
 
 Steps (default order): gen_scripts, install_conda, setup_conda, build_soft
 """
@@ -68,7 +68,7 @@ class InstallInfo:
         # The old script relied on `edpm install jana4ml4fpga` to clone the source;
         # since edpm is gone, build_software.sh clones it here when needed.
         self.repo_url = os.environ.get(
-            "ML4FPGA_REPO_URL", "https://github.com/JeffersonLab/JANA4ML4FPGA.git")
+            "ML4FPGA_REPO_URL", "https://github.com/JeffersonLab/jana4ml4fpga.git")
         self.branch = os.environ.get("ML4FPGA_BRANCH", "main")
         self.source_override = os.environ.get("ML4FPGA_SOURCE_DIR")
         self.auto_clone_dir = path.join(self.top_dir, "JANA4ML4FPGA")

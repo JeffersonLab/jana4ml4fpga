@@ -2,6 +2,33 @@
 
 EIC R&amp;D supported project developing ML on FPGA for streaming readout systems
 
+## Install from source
+
+`install_software.py` is a one-file installer: it bootstraps a self-contained
+[Miniforge](https://github.com/conda-forge/miniforge) environment (ROOT, a C++20
+toolchain, CMake) and then builds jana4ml4fpga. No pre-installed dependencies are
+needed - JANA2 is fetched and built by the project itself.
+
+```bash
+wget https://raw.githubusercontent.com/JeffersonLab/jana4ml4fpga/main/install_software.py
+python3 install_software.py
+```
+
+Everything is installed under the current directory (set `ML4FPGA_TOP_DIR` to
+install elsewhere). When it finishes, load the environment and run:
+
+```bash
+source setup_env.sh          # bash; use setup_env.csh for (t)csh
+jana4ml4fpga --help
+```
+
+Re-run a single step, or remove everything the installer created:
+
+```bash
+python3 install_software.py -s build_soft   # re-run only the build + install step
+python3 install_software.py --clear         # remove miniforge, build, install, scripts
+```
+
 ## How to run
 
 ### Docker images
