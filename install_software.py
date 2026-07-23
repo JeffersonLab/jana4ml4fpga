@@ -71,7 +71,7 @@ class InstallInfo:
             "ML4FPGA_REPO_URL", "https://github.com/JeffersonLab/jana4ml4fpga.git")
         self.branch = os.environ.get("ML4FPGA_BRANCH", "main")
         self.source_override = os.environ.get("ML4FPGA_SOURCE_DIR")
-        self.auto_clone_dir = path.join(self.top_dir, "JANA4ML4FPGA")
+        self.auto_clone_dir = path.join(self.top_dir, "jana4ml4fpga")
         source_dir = self.source_override
         if not source_dir:
             if path.isfile(path.join(self.this_script_dir, "CMakeLists.txt")):
@@ -378,10 +378,10 @@ def clear_all():
 
 if __name__ == "__main__":
     steps = OrderedDict()
-    steps["gen_scripts"] = step0_generate_scripts
-    steps["install_conda"] = step1_install_miniforge
-    steps["setup_conda"] = step2_setup_conda
-    steps["build_soft"] = step3_build_software
+    steps["scripts"] = step0_generate_scripts
+    steps["conda"] = step1_install_miniforge
+    steps["setup"] = step2_setup_conda
+    steps["build"] = step3_build_software
 
     steps_help = "Install steps (in default order):\n" + "\n".join(
         "   " + s for s in steps.keys()

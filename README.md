@@ -1,13 +1,59 @@
 # JANA4ML4FPGA
 
-EIC R&amp;D supported project developing ML on FPGA for streaming readout systems
+EIC R&amp;D supported project developing ML on FPGA for streaming readout systems.
+Built on [JANA2](https://github.com/JeffersonLab/JANA2); reads CODA/EVIO raw data
+(FA125/FA250 ADC and SRS/GEM), reconstructs GEM clusters, and writes a flat ROOT
+tree.
+
+## Docker
+
+The project ships a single image built from
+[`docker/jana4ml4fpga/Dockerfile`](docker/jana4ml4fpga/Dockerfile): the full
+software stack (ROOT, patched JANA2, jana4ml4fpga) on top of `eicdev/eic-base`.
+
+Pull it:
+
+```bash
+docker pull eicdev/jana4ml4fpga:latest
+```
+
+…or build it locally (context is the repo root):
+
+```bash
+docker build -f docker/jana4ml4fpga/Dockerfile -t eicdev/jana4ml4fpga:latest .
+```
+
+Run an interactive shell:
+
+```bash
+docker run -it --rm eicdev/jana4ml4fpga:latest bash
+```
+
+- `-it` — interactive session (needed for a bash shell; without it `ctrl+c` may not work).
+- `--rm` — remove the container's filesystem when it exits. Omit it to keep the
+  container and restart it later with `docker start`.
+
+Mount a host directory (e.g. your EVIO data) with `-v`:
+
+```bash
+docker run -it --rm -v /host/data:/mnt/data eicdev/jana4ml4fpga:latest
+```
+
+For C++ debugging (GDB) add:
+
+```bash
+--cap-add=SYS_PTRACE --security-opt seccomp=unconfined
+```
+
+Docs: [docker run](https://docs.docker.com/engine/reference/commandline/run/),
+[bind mounts](https://docs.docker.com/storage/bind-mounts/).
 
 ## Install from source
 
 `install_software.py` is a one-file installer: it bootstraps a self-contained
 [Miniforge](https://github.com/conda-forge/miniforge) environment (ROOT, a C++20
 toolchain, CMake) and then builds jana4ml4fpga. No pre-installed dependencies are
-needed - JANA2 is fetched and built by the project itself.
+needed — JANA2 is fetched and built by the project itself.
 
 ```bash
 wget https://raw.githubusercontent.com/JeffersonLab/jana4ml4fpga/main/install_software.py
@@ -29,238 +75,147 @@ python3 install_software.py -s build_soft   # re-run only the build + install st
 python3 install_software.py --clear         # remove miniforge, build, install, scripts
 ```
 
-## How to run
+## Running jana4ml4fpga
 
-### Docker images
+Processing is driven by plugins. The active ones are:
 
-There are two images:
+| plugin        | role                                                          |
+|---------------|--------------------------------------------------------------|
+| `CDAQfile`    | serial EVIO file source                                      |
+| `CDAQfileMT`  | mmap EVIO source with parallel deserialization (`-Pevio:parallel=1`) |
+| `flat_tree`   | writes the events ROOT tree (per-thread + merged when `nthreads>1`) |
+| `gemrecon2`   | GEM reconstruction (pedestals → clusters)                    |
+| `root_output` | shared ROOT output file service                              |
+| `log`         | logging service (loaded by default)                          |
 
-- [**eicdev/ml4fpga-pre**](https://hub.docker.com/r/eicdev/ml4fpga-pre) - with all dependencies but without JANA4ML4FPGA built.
-  This image is used for CI or development reasons and is not designed for running JANA4ML4FPGA   
-- [**eicdev/ml4fpga**](https://hub.docker.com/r/eicdev/ml4fpga) - The image can be used to run JANA4ML4FPGA
-
-## Running in docker
-*(extended information about options of running this docker containers)*
-
-To download/update the container
-
-```bash
-docker pull eicdev/ml4fpga:latest
-```
-
-Running docker:
+### ADC readout → flat tree
 
 ```bash
-docker run -it --rm eicdev/ml4fpga:latest bash
+jana4ml4fpga \
+  -Pplugins=CDAQfile,flat_tree,root_output \
+  -Pnthreads=1 \
+  -Phistsfile=output.root \
+  hd_rawdata_002633_000.evio
 ```
 
-- ```--rm``` flag Docker **automatically cleans up the container** and 
-  remove the file system **when the container exits**.
-- ```-it``` flag enables interactive session. Without this flag `ctrl+c` may not work. 
-  In general `-it` is used to run e.g. bash session (see below)
-- 
+### SRS / GEM reconstruction
 
-**Extremely shallow docker crash course** 
-
-Docker utilizes the pull command to download a package called an **image**. 
-When Docker executes the image, it runs within a **container**. 
-Each time the `docker run` command is called, a new container is generated.
-Docker creates a modifiable layer over the **image** and starts the **container** with the given command.
-
-If the `--rm` flag is not used, stopping the container does not remove it.
-A stopped container can be restarted with all its previous changes intact using the docker start command.
-
-Docker functions similarly to tmux or screen, allowing you to reconnect to the running image, 
-attach multiple bash shells, and even reconnect if the container is stopped. 
-This feature facilitates easier debugging and data retention. 
-However, be cautious when using the --rm flag, as it removes the container upon stopping.
-
-
-Docker documentation:
-[docker run](https://docs.docker.com/engine/reference/commandline/run/),
-[docker start](https://docs.docker.com/engine/reference/commandline/start/),
-[--rm flag](https://docs.docker.com/engine/reference/run/#clean-up---rm).
-
-
-### Add your system directory inside docker
-
-You can bind any directory on your system to docker image by using **-v** flag:
-
-```bash 
--v <your/directory>:<docker/directory>
-
-# /mnt is a good place to mount directories inside a container
-docker run -it --rm -v /host/dir:/mnt/data eicdev/ml4fpga:latest
+```bash
+jana4ml4fpga \
+  -Pplugins=CDAQfile,flat_tree,root_output,gemrecon2 \
+  -Pdaq:srs_window_raw:ntsamples=3 \
+  -Pgemrecon:mapping=scripts/db/2026_mapping_PS.cfg \
+  -Phistsfile=output.root \
+  hd_rawdata_008169_000.evio
 ```
-More information on [docker bind](https://docs.docker.com/storage/bind-mounts/),
-There are other mechanisms of how to manage data in docker. 
-[the official documentation on managing data in docker](https://docs.docker.com/storage/)
 
+### Parallel (multithreaded) SRS
 
-**Debugging** : To do C++ debugging (run GDB or so) one has to specify additional flags
-(the debugging is switched off by docker by default for security reasons):
+Use the mmap source and worker threads. `flat_tree` automatically switches to
+multithreaded output (per-thread trees merged via `TBufferMerger`); entries are
+**unordered** — sort by the `event_number` leaf.
 
-```--cap-add=SYS_PTRACE --security-opt seccomp=unconfined```
+```bash
+jana4ml4fpga \
+  -Pplugins=CDAQfileMT,flat_tree,root_output,gemrecon2 \
+  -Pevio:parallel=1 -Pnthreads=8 \
+  -Pdaq:srs_window_raw:ntsamples=3 \
+  -Pgemrecon:mapping=scripts/db/2026_mapping_PS.cfg \
+  -Phistsfile=output.root \
+  hd_rawdata_008169_000.evio
+```
 
+The multithreaded readout needs the allocator tuning
+`GLIBC_TUNABLES=glibc.malloc.tcache_count=4096:glibc.malloc.arena_max=96`
+(`setup_env.sh` sets it for you).
 
+### Farm helper scripts
+
+Under [`scripts/`](scripts): `run_evio.sh <run> <nevents> <mode> <srsbin> [file]`
+runs a single serial job (`mode` = `ADC` / `DUMP` / `SRS`); `run_evio_fast.sh`
+is the parallel (`CDAQfileMT`) SRS variant; `run_list*.sh` dispatch jobs across
+farm nodes.
+
+## Flags
+
+### JANA
+
+```sh
+-Pnthreads=8                    # worker threads
+-Pjana:nevents=10000            # events to process (0 = all)
+-Pjana:nskip=10000              # events to skip
+-Pjana:timeout=0                # disable the watchdog (needed when debugging/paused)
+-Pjana:debug_plugin_loading=1   # print where plugins are loaded from
+```
+
+### Logging (aspect-based)
+
+Each subsystem logs under an *aspect*: `evio` (readout), `gem` (reconstruction),
+`out` (tree writer), `dqm`. Set the global default and override per aspect:
+
+```sh
+-Plog:level=info    # global default level
+-Pevio:log=debug    # per-aspect override
+-Pgem:log=info
+-Pout:log=warn
+```
+
+### SRS / GEM
+
+```sh
+-Pdaq:srs_window_raw:ntsamples=3            # number of SRS time bins
+-Pgemrecon:mapping=scripts/db/2026_mapping_PS.cfg
+-Pgemrecon:plane_name_x=GEMTR1X             # clustering plane names (default URWELLX/Y)
+-Pgemrecon:plane_name_y=GEMTR1Y
+-Pgemrecon2:freeze_after=500                # freeze calibration after N events (0 = never)
+```
+
+### Parallel source / tree writer
+
+```sh
+-Pevio:parallel=1               # CDAQfileMT: parallel EVIO deserialization
+-Pevio:prefetch_mb=256          # mmap read-ahead
+-Pflat_tree:mt_output=events.root   # MT events file (default <histsfile>_events.root)
+-Pflat_tree:flush_events=10000      # per-thread fills between TBufferMerger flushes
+```
+
+## TCP test sender / receiver
+
+Two test executables built with the project:
+
+```bash
+# terminal 1
+tcp_receiver
+
+# terminal 2
+tcp_sender -req=ex -cmd=send -host=localhost:20249
+```
 
 ## Data
 
-All EVIO DATA is here:
+Raw EVIO data on the gluon farm:
 
 ```
 /gluonraid3/data4/rawdata/trd/DATA/hd_rawdata_*.evio
 ```
 
-Physics runs:
--------------
+Test setup (as recorded in the run logs):
+
+- `rocFMWPC1` — TI master with a single FA250 board; last 3 channels are calorimeter data.
+- `rocTRD1` — slave with 4 FA125 boards reading GEMTRD (bank 16) and SRS/GEM data (bank 17).
+
+Selected physics runs:
 
 ```
-===>  2 crates , 3 detectors : CAL/FA250, GEMTRD/FA125 , GEM/SRS
-CODA::  Run_2531 GEMTRD:ok; CAL:ok; SRS:del=0x41; ROSYBC=0x90 3bin; 10APV;OK; TRDpos=100; 5.1M ev  *PHYS* !!!!
-cDAQ::  Run_2543 GEMTRD:ok; CAL:ok; SRS:del=0x41; ROSYBC=0x90 3bin; 10APV;OK; TRDpos=100; 1.1M ev  *PHYS* !!!!
+===>  2 crates, 3 detectors: CAL/FA250, GEMTRD/FA125, GEM/SRS
+Run_2531  GEMTRD:ok CAL:ok SRS:del=0x41 3bin 10APV  5.1M ev  *PHYS*
+Run_2543  GEMTRD:ok CAL:ok SRS:del=0x41 3bin 10APV  1.1M ev  *PHYS*
 
+===>  1 crate, 2 detectors: GEMTRD/FA125, GEM/SRS
+Run_2548  GEMTRD:ok CAL:no SRS:del=0x40 9bin 10APV  1.5M ev  *PHYS*
+Run_2567  GEMTRD:ok CAL:no SRS:del=0x40 9bin 10APV  3.2M ev  *PHYS*
 
-===> 1 crate ; 2 detectors : GEMTRD/FA125 ; GEM/SRS
-CODA::  Run_2548 (CODA) GEMTRD:ok; CAL:No; SRS:del=0x40; ROSYBC=0x70 9bin; 10APV;OK; TRDpos=155; 1.5M ev  *PHYS* !!!!
-cDAQ::  Run_2567 (cDAQ) GEMTRD:ok; CAL:No; SRS:del=0x40; ROSYBC=0x70 9bin; 10APV;OK; TRDpos=155; 3.2M ev  *PHYS* !!!!
-
-===> new files Mode8 (RAW) and Mode5 (short)
-cDAQ / rawmode (8) ; trd_ti_fp.conf ; 300 nA; 650-700Hz ; 16 MB/s
-14:09 Run_2633 (cDAQ) GEMTRD:ok; CAL:on; SRS:del=0x41; ROSYBC=0x70 3bin; 10APV;OK; TRDpos=150; Mode8; 250K evt;
-
-cDAQ / Mode5; thr300 / trd_ti_fp_m5.conf ; 300 nA; 650-700Hz ; 7.5 MB/s
-14:48 Run_2635 (cDAQ) GEMTRD:ok; CAL:on; SRS:del=0x41; ROSYBC=0x70 3bin; 10APV;OK; TRDpos=50;  Mode5; 250 K evt;
+===>  Mode8 (RAW) / Mode5 (short)
+Run_2633  GEMTRD:ok CAL:on SRS:del=0x41 3bin 10APV  Mode8  250K ev
+Run_2635  GEMTRD:ok CAL:on SRS:del=0x41 3bin 10APV  Mode5  250K ev
 ```
-
-Test setup configuration:
-
-- rocFMWPC1 is a TI master (no TSG), with single fa250 board, the last 3 channels contain data from the calorimeter.
-- rocTRD1 is a slave with 4 fa125 boards reading GEMTRD (bank 16) also provides SRS/GEM data - bank 17.
-
-
-Example of reading evio file: 
-
-```bash
-/mnt/c/eic/data/2023-02_ml4fpga_trd_data/hd_rawdata_002539_000.evio
-```
-
-
-## TCP test sender and receiver
-
-There are two test executables built with the project that could be used for testing
-
-- tcp_sender - can send dummy evio events through tcp
-- tcp_receiver - can receive them
-
-To make test loop: sender sends data to receiver - drinks coffee (or what it does): 
-
-```bash
-# In one terminal/process
-tcp_receiver
-
-# In another terminal/process
-tcp_sender -req=ex -cmd=send -host=localhost:20249
-```
-
-## Run flags examples
-
-### CDAQ evio example analysis
-
-Run parameters:
-
-```
-jana4ml4fpga
--Pplugins=log,root_output,CDAQfile,example_evio_analysis
--Pjana:debug_plugin_loading=1
--PCDAQEVIOFileSource:LogLevel=trace
--Pexample_evio_analysis:LogLevel=trace
--Pjana:timeout=0
--Pjana:nevents=10
--Pnthreads=1
--Phistsfile=/home/romanov/eic/JANA4ML4FPGA/cmake-build-debug/test.root
-/mnt/work/data/2023-03-03-trd-data/hd_rawdata_002633_000.evio
-```
-
-### Read EVIO and save to flat root file
-
-```sh
-jana4ml4fpga
--Pplugins=log,root_output,CDAQfile,flat_tree
--Pnthreads=1
--Phistsfile=output_file_name.root
-hd_rawdata_002633_000.evio          # <= input file
-```
-
-### CDAQ TCP via EVIO
-
-*(please refer to the [cdaq plugin](src/plugins/cdaq) for details on writing events to TCP using the `cdaq` plugin)*
-
-```sh
-jana4ml4fpga
--Pplugins=log,root_output,flat_tree,cdaq
--Pjana:timeout=0
--Pnthreads=1
-tcp-cdaq-evio
-```
-
-## Flags
-
-
-#### JANA
-
-```sh
-# Write extended info where plugins are loaded from  
--Pjana:debug_plugin_loading=1
-
-# <plugin>:LogLevel usually controls verbosity level of a plugin
--Pflat_tree:LogLevel=trace
-
-# Switches off jana internal watchdog timer
-# Setting timeout=0 is needed if processing threads stops, 
-# i.e. when pausing on debug breakpoint or waiting for connection, etc. 
--Pjana:timeout=0
-
-# Set number of events to process
--Pjana:nevents=10000
-
-# Set number of events to skip
--Pjana:nskip=10000
-
-# Save events to EVIO file
--PEVIO:output_file=/file/name.evio
-
-
-```
-
-#### SRS
-
-```sh
-# (!) Important (!) Number of SRS window raw data time all_samples
--Pdaq:srs_window_raw:ntsamples=9
-
-# (!) Important (!) GEM mapping file
--Pgemrecon:mapping=/tmp/JANA4ML4FPGA/scripts/db/2023_mapping_fermilab3.cfg
-
-# Logging flags
--Pgemrecon:LogLevel=info
--Pgemrecon:ClusterF:LogLevel=info
-
-
-```
-
-#### Data Quality Monitor (DQM)
-
-```sh
-# Min event number, when DQM fill plots.
--Pdqm:min_event
-
-# Max event number, when DQM fill plots. 0 - no cap
--Pdqm:max_event
-
-# DQM work every x events: 1 - every event, 3 - once every 3 events, etc.
--Pdqm:every
-```
-
-
-
