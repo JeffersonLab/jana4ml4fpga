@@ -9,13 +9,14 @@ Parameters:
 - 'MODE'   - Can be "ADC", "DUMP", or "SRS". Defaults to "ADC".
 - 'SRSBIN' - Used when 'MODE' is "SRS". Number of SRS time bins . Defaults to 3.
 Usage:
-run_evio.sh [run_num] [max events] [mode] [srsbin]
+run_evio.sh [run_num] [max events] [mode] [srsbin] [file_num]
 EOH
 
 RUN=${1-help}
 MAXEVT=${2-0}
 MODE=${3-ADC}
 SRSBIN=${4-3}
+FILE=$5
 
 if [[ $RUN == "help" ]] || [[ $RUN == "--help" ]] ; then
     echo -e "\n$HELP_TEXT\n"
@@ -29,8 +30,14 @@ elif (( 3156 < $RUN && $RUN <= 3261)) ; then
     SRS_MAPPING="db/2023_fermi_SRSmap1.cfg"
 elif ((3261 < $RUN && $RUN <=3299)) ; then
     SRS_MAPPING="db/2023_fermi_SRSmap2.cfg"
-elif ((4000 < $RUN && $RUN <=4999)) ; then
-    SRS_MAPPING="db/2023_mapping_HDGEM.cfg"
+elif ((4700 < $RUN && $RUN<7000)) ; then
+    SRS_MAPPING="db/2024_mapping_CERN.cfg"
+elif ((8000 < $RUN && $RUN<10000)) ; then
+    SRS_MAPPING="db/2026_mapping_PS.cfg"
+#elif ((4000 < $RUN && $RUN<5000)) ; then
+#    SRS_MAPPING="db/2023_mapping_HDGEM.cfg"
+#elif ((5000 < $RUN)) ; then
+#    SRS_MAPPING="db/2024_mapping_CERN.cfg"
 fi
 
 echo "SRS_MAPPING = $SRS_MAPPING"
@@ -40,7 +47,22 @@ echo "SRS_MAPPING = $SRS_MAPPING"
 
 RUNNUM=$(printf '%06d' ${RUN} ) 
 
-FILELIST="`/bin/ls DATA/hd_rawdata_${RUNNUM}_*.evio `"
+if [[ x$FILE == "x" ]] ; then 
+    echo " All Files "
+#    FILELIST="`/bin/ls DATA3/hd_rawdata_${RUNNUM}_*.evio `"
+#    FILELIST="`/bin/ls  /gluonraid3/data4/rawdata/trd/DATA/hd_rawdata_${RUNNUM}_*.evio `"
+    FILELIST="`/bin/ls /gluonraid3/data2/rawdata/trd/DATA/hd_rawdata_${RUNNUM}_*.evio `"
+    ROOT_FILENAME=ROOT/Run_${RUNNUM}.root
+    echo " Process All files for RUN=$RUN  ROOT_FILENAME=$ROOT_FILENAME "
+else 
+    FILENUM=$(printf '%03d' ${FILE} )
+#    FILELIST="`/bin/ls DATA3/hd_rawdata_${RUNNUM}_${FILENUM}.evio `"
+#    FILELIST="`/bin/ls  /gluonraid3/data3/rawdata/trd/DATA/hd_rawdata_${RUNNUM}_${FILENUM}.evio `"
+    FILELIST="`/bin/ls /gluonraid3/data2/rawdata/trd/DATA/hd_rawdata_${RUNNUM}_${FILENUM}.evio `"
+    ROOT_FILENAME=ROOT/Run_${RUNNUM}_${FILENUM}.root
+    echo " Process file = $FILELIST  ROOT_FILENAME=$ROOT_FILENAME "
+fi
+sleep 1
 
 echo "FILELIST = $FILELIST "
 echo "RUN = $RUN "
@@ -57,6 +79,7 @@ if [[ $MODE  == "ADC" ]] ; then
     echo " MODE = ADC "
     sleep 1
     set -x
+    echo "jana4ml4fpga -Pplugins=log,root_output,flat_tree,CDAQfile   -Pnthreads=1 -Pjana:nevents=${MAXEVT} -Phistsfile=ROOT/Run_${RUNNUM}.root  $FILELIST | grep -v flat_tree"
     jana4ml4fpga -Pplugins=log,root_output,flat_tree,CDAQfile   -Pnthreads=1 -Pjana:nevents=${MAXEVT} \
     -Phistsfile=ROOT/Run_${RUNNUM}.root  $FILELIST | grep -v flat_tree
     set +x
@@ -77,6 +100,7 @@ else
     set -x
     jana4ml4fpga -Pplugins=CDAQfile,flat_tree,root_output,gemrecon,dqm \
     -Pjana:nevents=${MAXEVT} \
+    -Pjana:timeout=0 \
     -Pdaq:srs_window_raw:ntsamples=${SRSBIN} \
     -Pjana:debug_plugin_loading=1 \
     -Pevio:LogLevel=trace \
@@ -84,7 +108,7 @@ else
     -Pgemrecon:LogLevel=info \
     -Pgemrecon:ClusterF:LogLevel=info \
     -Pgemrecon:mapping=${SRS_MAPPING} \
-    -Phistsfile=ROOT/Run_${RUNNUM}.root  $FILELIST
+    -Phistsfile=${ROOT_FILENAME}  $FILELIST
     set +x
 fi
 

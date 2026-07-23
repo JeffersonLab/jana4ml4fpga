@@ -1219,7 +1219,10 @@ void EVIOBlockedEventParser::Parsef250Bank(uint32_t rocid, uint32_t *&iptr, uint
                     iptr--;
                 }
                 if (m_config.VERBOSE > 7) cout << "      FADC250 Trigger Time: t=" << t << endl;
-                if (event) event->Insert(new Df250TriggerTime(rocid, slot, itrigger, t));
+                if (event) { 
+		  event->Insert(new Df250TriggerTime(rocid, slot, itrigger, t));
+		  cout << "call Insert() method:      FADC250 Trigger Time: t=" << t << "      rocid="<<rocid<<" slod="<<slot<<endl;
+		}
             }
                 break;
             case 4: // Window Raw Data
