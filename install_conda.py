@@ -15,8 +15,16 @@ Usage:
     python3 install_conda.py -s setup_conda  # a single step
     python3 install_conda.py -s build_soft   # rebuild only
 
+Environment variables:
+    ML4FPGA_TOP_DIR      install location (conda + generated scripts).
+                         Default: this script's directory.
+    ML4FPGA_SOURCE_DIR   project checkout to build. Default: this script's dir if
+                         it contains CMakeLists.txt, else $TOP_DIR/JANA4ML4FPGA
+                         (git-cloned on first build).
+    ML4FPGA_BRANCH       branch to clone when the source is fetched. Default: main.
+    ML4FPGA_REPO_URL     repo to clone. Default: JeffersonLab/JANA4ML4FPGA.
+
 Steps (default order): gen_scripts, install_conda, setup_conda, build_soft
-The install goes into $ML4FPGA_TOP_DIR (default: this script's directory).
 """
 
 import argparse
@@ -50,6 +58,24 @@ class InstallInfo:
         self.conda_dir = path.join(self.top_dir, "miniforge")
         self.conda_env_name = CONDA_ENV_NAME
         self.conda_env_dir = path.join(self.conda_dir, "envs", self.conda_env_name)
+
+        # Project source to build. Resolution priority:
+        #   1. $ML4FPGA_SOURCE_DIR                       (explicit override)
+        #   2. this script's directory, if it is a checkout (has CMakeLists.txt)
+        #   3. $TOP_DIR/JANA4ML4FPGA                     (git-cloned if missing)
+        # The old script relied on `edpm install jana4ml4fpga` to clone the source;
+        # since edpm is gone, build_software.sh clones it here when needed.
+        self.repo_url = os.environ.get(
+            "ML4FPGA_REPO_URL", "https://github.com/JeffersonLab/JANA4ML4FPGA.git")
+        self.branch = os.environ.get("ML4FPGA_BRANCH", "main")
+        source_dir = os.environ.get("ML4FPGA_SOURCE_DIR")
+        if not source_dir:
+            if path.isfile(path.join(self.this_script_dir, "CMakeLists.txt")):
+                source_dir = self.this_script_dir  # running from inside the repo
+            else:
+                source_dir = path.join(self.top_dir, "JANA4ML4FPGA")  # will be cloned
+        self.source_dir = source_dir
+        self.build_dir = path.join(self.source_dir, "build")
 
         self.scripts_dir = path.join(self.top_dir, INSTALL_SCRIPTS_DIR_NAME)
         self.script_setup_conda = path.join(self.scripts_dir, "setup_conda.sh")
@@ -97,13 +123,23 @@ system_default = system_default_sect
 Options = UnsafeLegacyRenegotiation
 """
 
+# Allocator tuning required to realize the ClearOutputs speedup (~2x readout):
+# un-serializing the ~2k per-event frees exposes glibc malloc cross-thread
+# contention otherwise. Must be set in the *run* environment, not just at build
+# time (see ai_rework/notes/DECISIONS.md #14). Kept in one place:
+GLIBC_TUNABLES_VALUE = "glibc.malloc.tcache_count=4096:glibc.malloc.arena_max=96"
+
 template_user_sh = """\
 export {env_name_top_dir}={top_dir}
 
 # Activate the conda environment
 source $ML4FPGA_TOP_DIR/miniforge/etc/profile.d/conda.sh
 conda activate {conda_env_name}
-""".format(env_name_top_dir=ENV_NAME_TOP_DIR, **install_info.asdict())
+
+# glibc allocator tuning - required for the multithreaded readout speedup (~2x)
+export GLIBC_TUNABLES={glibc_tunables}
+""".format(env_name_top_dir=ENV_NAME_TOP_DIR, glibc_tunables=GLIBC_TUNABLES_VALUE,
+           **install_info.asdict())
 
 template_user_csh = """\
 setenv {env_name_top_dir} {top_dir}
@@ -111,7 +147,11 @@ setenv {env_name_top_dir} {top_dir}
 # Activate the conda environment
 source $ML4FPGA_TOP_DIR/miniforge/etc/profile.d/conda.csh
 conda activate {conda_env_name}
-""".format(env_name_top_dir=ENV_NAME_TOP_DIR, **install_info.asdict())
+
+# glibc allocator tuning - required for the multithreaded readout speedup (~2x)
+setenv GLIBC_TUNABLES {glibc_tunables}
+""".format(env_name_top_dir=ENV_NAME_TOP_DIR, glibc_tunables=GLIBC_TUNABLES_VALUE,
+           **install_info.asdict())
 
 template_setup_conda = """\
 set -e
@@ -141,9 +181,17 @@ echo ""
 
 source {script_env_sh}
 
-# JANA2 is fetched and built by the project (cmake/fetch_dependencies.cmake).
-cmake -S {this_script_dir} -B {this_script_dir}/build -DCMAKE_BUILD_TYPE=Release
-cmake --build {this_script_dir}/build --target install -j"$(nproc)"
+# Project source: {source_dir}
+# Override with ML4FPGA_SOURCE_DIR. If it has no CMakeLists.txt it is cloned from
+# {repo_url} (branch {branch}). JANA2 itself is fetched and built by the project
+# (cmake/fetch_dependencies.cmake), which also applies the ClearOutputs patch.
+if [ ! -f "{source_dir}/CMakeLists.txt" ]; then
+    echo "No CMakeLists.txt in {source_dir} - cloning {repo_url} (branch {branch})"
+    git clone --branch {branch} {repo_url} "{source_dir}"
+fi
+
+cmake -S "{source_dir}" -B "{build_dir}" -DCMAKE_BUILD_TYPE=Release
+cmake --build "{build_dir}" --target install -j"$(nproc)"
 """.format(**install_info.asdict())
 
 
@@ -170,7 +218,7 @@ def run(command, exit_on_error=True):
             print(str(line.encode("utf-8")))
 
     retval = process.wait()
-    print(f"------------------------------------------")
+    print("------------------------------------------")
     print(f"RUN DONE. RETVAL: {retval} (took {datetime.now() - start_time})\n\n")
 
     if retval != 0 and exit_on_error:
