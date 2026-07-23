@@ -108,7 +108,7 @@ else
     -Pdaq:srs_window_raw:ntsamples=${SRSBIN} \
     -Pjana:debug_plugin_loading=1 \
     -Plog:level=info \
-    -Pevio:log=trace \
+    -Pevio:log=info \
     -Pgem:log=info \
     -Pgemrecon:mapping=${SRS_MAPPING} \
     -Phistsfile=${ROOT_FILENAME}  $FILELIST
