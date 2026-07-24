@@ -538,3 +538,9 @@ builda/.cmake/api/v1/reply/target-single_event_evio_plugin-Debug-45d5044f6ee2716
 builda/.cmake/api/v1/reply/target-test_cdaq_plugin-Debug-1a63df2da7769ae19bf6.json
 builda/.cmake/api/v1/reply/toolchains-v1-fda9b2b219ff6ddc2e74.json
 builda/src/executables/jana4ml4fpga/jana4ml4fpga
+
+__pycache__/
+
+ai_rework/
+
+MULTITHREADING_PLAN.md

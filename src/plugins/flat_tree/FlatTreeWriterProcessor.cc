@@ -16,6 +16,7 @@
 #include <JANA/JEvent.h>
 
 #include <Math/GenVector/PxPyPzM4D.h>
+#include <Compression.h>   // ROOT::CompressionSettings / ROOT::kLZ4
 
 #include <spdlog/spdlog.h>
 #include <services/root_output/RootFile_service.h>
@@ -62,6 +63,18 @@ void FlatTreeWriterProcessor::Init() {
                              "Empty = <histsfile without .root>_events.root");
     app->SetDefaultParameter("flat_tree:flush_events", m_flush_events,
                              "MT mode: per-thread fills between TBufferMerger flushes");
+
+    // Output compression for the events tree. In MT mode every thread's buffers
+    // are funneled through TBufferMerger's single writer thread, which compresses
+    // on the way to disk - ROOT's default ZLIB is CPU-heavy and becomes the
+    // throughput cap for the large raw-SRS payload (~60 kB/event). LZ4 is much
+    // cheaper to compress (slightly bigger files) so the writer keeps up.
+    // Value is algo*100+level: 404=LZ4:4 (default), 101=ZLIB:1, 505=ZSTD:5, 0=none.
+    int compression = ROOT::CompressionSettings(ROOT::RCompressionSetting::EAlgorithm::kLZ4, 4);
+    app->SetDefaultParameter("flat_tree:compression", compression,
+                             "ROOT compression for the events tree "
+                             "(algo*100+level; 404=LZ4:4, 101=ZLIB:1, 505=ZSTD:5, 0=none)");
+
     m_mt_mode = (nthreads_str != "1") || !m_mt_output.empty();
 
     if (m_mt_mode) {
@@ -74,7 +87,7 @@ void FlatTreeWriterProcessor::Init() {
             if (pos != std::string::npos) stem = stem.substr(0, pos);
             m_mt_output = stem + "_events.root";
         }
-        m_merger = std::make_unique<ROOT::TBufferMerger>(m_mt_output.c_str());
+        m_merger = std::make_unique<ROOT::TBufferMerger>(m_mt_output.c_str(), "RECREATE", compression);
         m_log->info("MT writer mode: events tree -> '{}' via TBufferMerger "
                        "(flush every {} fills/thread). Entries are unordered; "
                        "sort by the event_number leaf.", m_mt_output, m_flush_events);
