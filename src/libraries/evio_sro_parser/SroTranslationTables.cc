@@ -57,6 +57,10 @@ FadcChannelAddress TranslateFadcChannel(int32_t rocid, int32_t slot, int32_t cha
     return address; // rocid in no table (e.g. 29, 84): Detector::Unknown, raw values still stored
 }
 
+bool IsEcalRocid(int32_t rocid) {
+    return rocid >= 0 && rocid < kRocidTableSize && ecal_rocid2sector[rocid] >= 0;
+}
+
 DcrbBoardAddress TranslateDcrbBoard(int32_t rocid, int32_t slot) {
     DcrbBoardAddress address;
     if (rocid < kDcrbRocidFirst || rocid > kDcrbRocidLast || slot < 0 || slot >= kSlotCount) {

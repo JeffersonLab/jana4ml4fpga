@@ -12,6 +12,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include "SroData.h"
 
@@ -22,5 +23,19 @@ namespace sro {
 /// header event_count; a mismatch counts as a structure error.
 /// Returns the number of frame sets parsed.
 uint32_t ParseBlockBody(const uint32_t* words, size_t word_count, uint32_t expected_sets, SroBlockData& out);
+
+/// Lazy variant for the filtered chain: decodes only ECAL ROC banks (the finder
+/// input) and records every other ROC bank as a DeferredRocBank word range.
+/// Operates on out.body_words, which the caller fills first (the block body must
+/// outlive deferred decoding). Sets out.lazy = true.
+uint32_t ParseBlockBodyLazy(uint32_t expected_sets, SroBlockData& out);
+
+/// Decodes the deferred ROC banks of one frame of a lazily parsed block,
+/// appending to the given vectors (hit frame_index is the block-level index).
+/// Together with the block's ECAL hit slice this reproduces exactly the hits
+/// eager parsing yields for the frame - values and counts, not order.
+void DecodeDeferredFrame(const SroBlockData& block, uint32_t frame_index,
+                         std::vector<FadcHit>& fadc_out, std::vector<DcrbHit>& dcrb_out,
+                         ParseStats& stats);
 
 } // namespace sro

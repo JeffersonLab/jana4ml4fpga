@@ -9,6 +9,8 @@
 
 #include "SroFrameRef.h"
 
+#include <libraries/evio_sro_parser/SroFrameSetParser.h>
+
 SroFrameUnfolder::SroFrameUnfolder() {
     SetTypeName(NAME_OF_THIS);
     SetParentLevel(JEventLevel::Timeslice);
@@ -102,7 +104,18 @@ JEventUnfolder::Result SroFrameUnfolder::Unfold(const JEvent& parent, JEvent& ch
         }
         m_frames_emitted++;
         child.SetEventNumber(block->frames[frame_index].frame_number);
-        child.Insert(new SroFrameRef{block, frame_index});
+        auto* ref = new SroFrameRef;
+        ref->block = block;
+        ref->frame_index = frame_index;
+        if (block->lazy) {
+            // The block carries only the ECAL hits; complete the selected frame:
+            // copy its ECAL slice, then decode its deferred (non-ECAL) ROC banks.
+            const sro::FrameInfo& frame = block->frames[frame_index];
+            ref->frame_fadc.assign(block->fadc_hits.begin() + frame.first_fadc_hit,
+                                   block->fadc_hits.begin() + frame.first_fadc_hit + frame.fadc_hit_count);
+            sro::DecodeDeferredFrame(*block, frame_index, ref->frame_fadc, ref->frame_dcrb, m_deferred_stats);
+        }
+        child.Insert(ref);
         bool parent_exhausted = (m_next_frame >= block->frames.size());
         return parent_exhausted ? Result::NextChildNextParent : Result::NextChildKeepParent;
     }
@@ -112,4 +125,7 @@ JEventUnfolder::Result SroFrameUnfolder::Unfold(const JEvent& parent, JEvent& ch
 void SroFrameUnfolder::Finish() {
     LOG_INFO(GetLogger()) << "SroFrameUnfolder: emitted " << m_frames_emitted << " of " << m_frames_seen
                           << " frames (finder=" << m_finder_mode << ")" << LOG_END;
+    if (m_deferred_stats.structure_errors > 0) {
+        LOG_WARN(GetLogger()) << "SroFrameUnfolder: deferred decode stats: " << m_deferred_stats.ToString() << LOG_END;
+    }
 }

@@ -39,8 +39,16 @@ bool ReadBank(const uint32_t* words, uint32_t pos, uint32_t limit, BankHeader& b
     return true;
 }
 
+// Decode destination: eager parsing points this at the block's flat vectors,
+// deferred per-frame decoding at a child event's own vectors.
+struct HitSink {
+    std::vector<FadcHit>& fadc_hits;
+    std::vector<DcrbHit>& dcrb_hits;
+    ParseStats& stats;
+};
+
 void UnpackFadcPayload(const uint32_t* words, uint32_t data_start, uint32_t data_end,
-                       uint32_t frame_index, uint16_t rocid, uint8_t slot, SroBlockData& out) {
+                       uint32_t frame_index, uint16_t rocid, uint8_t slot, HitSink& out) {
     FadcChannelAddress board_address; // translation depends on channel; resolved per hit
     for (uint32_t word_i = data_start; word_i < data_end; word_i++) {
         uint32_t val = words[word_i];
@@ -67,7 +75,7 @@ void UnpackFadcPayload(const uint32_t* words, uint32_t data_start, uint32_t data
 }
 
 void UnpackDcrbPayload(const uint32_t* words, uint32_t data_start, uint32_t data_end,
-                       uint32_t frame_index, uint16_t rocid, uint8_t slot, SroBlockData& out) {
+                       uint32_t frame_index, uint16_t rocid, uint8_t slot, HitSink& out) {
     DcrbBoardAddress board_address = TranslateDcrbBoard(rocid, slot);
     // Two words per entry: w0 = chgroup + channel bits 0-28, w1 = channel bits 29-47 + time.
     for (uint32_t word_i = data_start; word_i + 1 < data_end; word_i += 2) {
@@ -108,7 +116,7 @@ void UnpackDcrbPayload(const uint32_t* words, uint32_t data_start, uint32_t data
 
 // Parses one ROC time-slice bank (stream info + payload banks). Returns false on
 // a structure error; the caller then abandons this ROC bank but not the set.
-bool ParseRocBank(const uint32_t* words, const BankHeader& roc_bank, uint32_t frame_index, SroBlockData& out) {
+bool ParseRocBank(const uint32_t* words, const BankHeader& roc_bank, uint32_t frame_index, HitSink& out) {
     uint16_t rocid = static_cast<uint16_t>(roc_bank.tag);
 
     BankHeader stream_info;
@@ -184,12 +192,15 @@ bool ParseRocBank(const uint32_t* words, const BankHeader& roc_bank, uint32_t fr
     return true;
 }
 
-} // namespace
-
-uint32_t ParseBlockBody(const uint32_t* words, size_t word_count, uint32_t expected_sets, SroBlockData& out) {
+// Shared set/SIB/ROC structure walk. Eager mode decodes every ROC bank; lazy
+// mode decodes only ECAL ROC banks (the finder input) and records the rest as
+// DeferredRocBank word ranges for per-frame decoding after selection.
+uint32_t WalkBlockBody(const uint32_t* words, size_t word_count, uint32_t expected_sets, bool lazy, SroBlockData& out) {
     out.frames.clear();
     out.fadc_hits.clear();
     out.dcrb_hits.clear();
+    out.deferred_rocs.clear();
+    HitSink sink{out.fadc_hits, out.dcrb_hits, out.stats};
 
     uint32_t limit = static_cast<uint32_t>(word_count);
     uint32_t pos = 0;
@@ -221,22 +232,27 @@ uint32_t ParseBlockBody(const uint32_t* words, size_t word_count, uint32_t expec
         frame.timestamp = timestamp;
         frame.first_fadc_hit = static_cast<uint32_t>(out.fadc_hits.size());
         frame.first_dcrb_hit = static_cast<uint32_t>(out.dcrb_hits.size());
+        frame.first_deferred_roc = static_cast<uint32_t>(out.deferred_rocs.size());
 
         uint32_t roc_pos = sib.next;
         while (roc_pos < set_bank.content_end) {
+            uint32_t bank_pos = roc_pos;
             BankHeader roc_bank;
             if (!ReadBank(words, roc_pos, set_bank.content_end, roc_bank)) {
                 out.stats.structure_errors++;
                 break;
             }
             roc_pos = roc_bank.next;
-            if (!ParseRocBank(words, roc_bank, frame_index, out)) {
+            if (lazy && !IsEcalRocid(static_cast<int32_t>(roc_bank.tag))) {
+                out.deferred_rocs.push_back({bank_pos, set_bank.content_end});
+            } else if (!ParseRocBank(words, roc_bank, frame_index, sink)) {
                 out.stats.structure_errors++;
             }
         }
 
         frame.fadc_hit_count = static_cast<uint32_t>(out.fadc_hits.size()) - frame.first_fadc_hit;
         frame.dcrb_hit_count = static_cast<uint32_t>(out.dcrb_hits.size()) - frame.first_dcrb_hit;
+        frame.deferred_roc_count = static_cast<uint32_t>(out.deferred_rocs.size()) - frame.first_deferred_roc;
         out.frames.push_back(frame);
     }
 
@@ -244,6 +260,34 @@ uint32_t ParseBlockBody(const uint32_t* words, size_t word_count, uint32_t expec
         out.stats.structure_errors++;
     }
     return static_cast<uint32_t>(out.frames.size());
+}
+
+} // namespace
+
+uint32_t ParseBlockBody(const uint32_t* words, size_t word_count, uint32_t expected_sets, SroBlockData& out) {
+    out.lazy = false;
+    return WalkBlockBody(words, word_count, expected_sets, false, out);
+}
+
+uint32_t ParseBlockBodyLazy(uint32_t expected_sets, SroBlockData& out) {
+    out.lazy = true;
+    return WalkBlockBody(out.body_words.data(), out.body_words.size(), expected_sets, true, out);
+}
+
+void DecodeDeferredFrame(const SroBlockData& block, uint32_t frame_index,
+                         std::vector<FadcHit>& fadc_out, std::vector<DcrbHit>& dcrb_out,
+                         ParseStats& stats) {
+    const FrameInfo& frame = block.frames[frame_index];
+    const uint32_t* words = block.body_words.data();
+    HitSink sink{fadc_out, dcrb_out, stats};
+    for (uint32_t roc_i = frame.first_deferred_roc; roc_i < frame.first_deferred_roc + frame.deferred_roc_count; roc_i++) {
+        const DeferredRocBank& deferred = block.deferred_rocs[roc_i];
+        BankHeader roc_bank;
+        if (!ReadBank(words, deferred.bank_pos, deferred.bank_limit, roc_bank)
+            || !ParseRocBank(words, roc_bank, frame_index, sink)) {
+            stats.structure_errors++;
+        }
+    }
 }
 
 } // namespace sro

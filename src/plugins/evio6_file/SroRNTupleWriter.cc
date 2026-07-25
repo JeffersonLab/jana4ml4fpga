@@ -97,12 +97,13 @@ void SroRNTupleWriter::ProcessSequential(const JEvent& event) {
     *m_fields->frame_number = frame.frame_number;
     *m_fields->timestamp = frame.timestamp;
     *m_fields->block_number = block.block_number;
-    *m_fields->n_fadc_hits = frame.fadc_hit_count;
-    *m_fields->n_dcrb_hits = frame.dcrb_hit_count;
+    *m_fields->n_fadc_hits = ref->FadcCount();
+    *m_fields->n_dcrb_hits = ref->DcrbCount();
     m_frames_writer->Fill();
 
-    for (uint32_t hit_i = frame.first_fadc_hit; hit_i < frame.first_fadc_hit + frame.fadc_hit_count; hit_i++) {
-        const sro::FadcHit& hit = block.fadc_hits[hit_i];
+    const sro::FadcHit* fadc_hits = ref->FadcHits();
+    for (uint32_t hit_i = 0; hit_i < ref->FadcCount(); hit_i++) {
+        const sro::FadcHit& hit = fadc_hits[hit_i];
         *m_fields->fadc_frame_number = frame.frame_number;
         *m_fields->fadc_rocid = hit.rocid;
         *m_fields->fadc_slot = hit.slot;
@@ -117,8 +118,9 @@ void SroRNTupleWriter::ProcessSequential(const JEvent& event) {
         m_fadc_writer->Fill();
     }
 
-    for (uint32_t hit_i = frame.first_dcrb_hit; hit_i < frame.first_dcrb_hit + frame.dcrb_hit_count; hit_i++) {
-        const sro::DcrbHit& hit = block.dcrb_hits[hit_i];
+    const sro::DcrbHit* dcrb_hits = ref->DcrbHits();
+    for (uint32_t hit_i = 0; hit_i < ref->DcrbCount(); hit_i++) {
+        const sro::DcrbHit& hit = dcrb_hits[hit_i];
         *m_fields->dcrb_frame_number = frame.frame_number;
         *m_fields->dcrb_rocid = hit.rocid;
         *m_fields->dcrb_slot = hit.slot;
@@ -131,8 +133,8 @@ void SroRNTupleWriter::ProcessSequential(const JEvent& event) {
     }
 
     m_frames_written++;
-    m_fadc_written += frame.fadc_hit_count;
-    m_dcrb_written += frame.dcrb_hit_count;
+    m_fadc_written += ref->FadcCount();
+    m_dcrb_written += ref->DcrbCount();
 }
 
 void SroRNTupleWriter::Finish() {

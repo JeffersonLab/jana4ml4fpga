@@ -49,6 +49,8 @@ struct DcrbHit {
 /// One time frame (= one aggregated frame set on disk).
 /// Hit ranges are contiguous slices of the hit vectors in the same SroBlockData,
 /// so a frame's hits are [first, first+count) - no per-frame containers.
+/// Under lazy parsing the hit vectors hold only ECAL hits and the deferred range
+/// points at the frame's undecoded ROC banks (see ParseBlockBodyLazy).
 struct FrameInfo {
     uint32_t frame_number;
     uint64_t timestamp;         ///< ticks (~1 ns; frame length is 65536 ticks in sro_000791)
@@ -56,6 +58,15 @@ struct FrameInfo {
     uint32_t fadc_hit_count;
     uint32_t first_dcrb_hit;
     uint32_t dcrb_hit_count;
+    uint32_t first_deferred_roc = 0;
+    uint32_t deferred_roc_count = 0;
+};
+
+/// One not-yet-decoded ROC time-slice bank: a word range inside
+/// SroBlockData::body_words, decodable later with DecodeDeferredFrame.
+struct DeferredRocBank {
+    uint32_t bank_pos;    ///< word index of the ROC bank header
+    uint32_t bank_limit;  ///< walk limit (enclosing set bank content end)
 };
 
 /// Parse anomalies, counted instead of aborting (dac called exit() here).
@@ -73,11 +84,16 @@ struct ParseStats {
 };
 
 /// Everything parsed from one evio block (11 frame sets in sro_000791).
+/// lazy=true: fadc_hits holds ECAL hits only, dcrb_hits is empty, body_words
+/// owns the raw block body so deferred_rocs ranges stay decodable.
 struct SroBlockData {
     uint32_t block_number = 0;
+    bool lazy = false;
     std::vector<FrameInfo> frames;
     std::vector<FadcHit> fadc_hits;
     std::vector<DcrbHit> dcrb_hits;
+    std::vector<uint32_t> body_words;
+    std::vector<DeferredRocBank> deferred_rocs;
     ParseStats stats;
 };
 

@@ -12,6 +12,7 @@ EvioSroBlockSource::EvioSroBlockSource(std::string resource_name, JApplication* 
 
 void EvioSroBlockSource::Open() {
     GetApplication()->SetDefaultParameter("evio6_file:parse", m_parse_enabled, "false = read blocks but skip parsing (pure I/O measurement; no frames reach the output)");
+    GetApplication()->SetDefaultParameter("evio6_file:lazy_parse", m_lazy_parse, "true = decode only ECAL ROC banks up front; the unfolder decodes the rest per selected frame (false = eager full decode)");
     m_reader = std::make_unique<sro::SroBlockReader>(std::vector<std::string>{GetResourceName()});
 }
 
@@ -33,7 +34,13 @@ JEventSource::Result EvioSroBlockSource::Emit(JEvent& event) {
     // the unfolder's Preprocess to parallelize it; measure against this first.)
     auto* block_data = new sro::SroBlockData();
     block_data->block_number = m_raw_block.block_number;
-    if (m_parse_enabled) {
+    if (m_parse_enabled && m_lazy_parse) {
+        // Lazy mode: the block keeps its raw body so deferred ROC banks stay
+        // decodable after selection; the reader reallocates on the next read.
+        block_data->body_words = std::move(m_raw_block.words);
+        sro::ParseBlockBodyLazy(m_raw_block.event_count, *block_data);
+        m_run_stats.Add(block_data->stats);
+    } else if (m_parse_enabled) {
         sro::ParseBlockBody(m_raw_block.words.data(), m_raw_block.words.size(), m_raw_block.event_count, *block_data);
         m_run_stats.Add(block_data->stats);
     }

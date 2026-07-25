@@ -36,6 +36,10 @@ int32_t PayloadToSlot(int32_t payload_id);
 /// Unknown on purpose (identity unresolved, see phase1_QUESTIONS.md Q11).
 FadcChannelAddress TranslateFadcChannel(int32_t rocid, int32_t slot, int32_t channel);
 
+/// True when the rocid carries ECAL FADCs - the only hits the coincidence
+/// finder consumes, hence the only ROC banks lazy parsing decodes up front.
+bool IsEcalRocid(int32_t rocid);
+
 /// DCRB board -> sector/region/superlayer; fields -1 if rocid is not a DCRB rocid.
 DcrbBoardAddress TranslateDcrbBoard(int32_t rocid, int32_t slot);
 

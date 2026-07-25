@@ -11,27 +11,28 @@ SroNullWriter::SroNullWriter() {
 
 void SroNullWriter::ProcessSequential(const JEvent& event) {
     const auto* ref = event.GetSingle<SroFrameRef>();
-    const sro::SroBlockData& block = *ref->block;
     const sro::FrameInfo& frame = ref->Frame();
 
     std::lock_guard<std::mutex> lock(m_mutex);
 
     uint64_t sum = frame.frame_number + frame.timestamp;
-    for (uint32_t hit_i = frame.first_fadc_hit; hit_i < frame.first_fadc_hit + frame.fadc_hit_count; hit_i++) {
-        const sro::FadcHit& hit = block.fadc_hits[hit_i];
+    const sro::FadcHit* fadc_hits = ref->FadcHits();
+    for (uint32_t hit_i = 0; hit_i < ref->FadcCount(); hit_i++) {
+        const sro::FadcHit& hit = fadc_hits[hit_i];
         sum += hit.charge + hit.time_ticks + hit.rocid + hit.slot + hit.channel
              + hit.detector + hit.sector + hit.io + hit.view + hit.strip;
     }
-    for (uint32_t hit_i = frame.first_dcrb_hit; hit_i < frame.first_dcrb_hit + frame.dcrb_hit_count; hit_i++) {
-        const sro::DcrbHit& hit = block.dcrb_hits[hit_i];
+    const sro::DcrbHit* dcrb_hits = ref->DcrbHits();
+    for (uint32_t hit_i = 0; hit_i < ref->DcrbCount(); hit_i++) {
+        const sro::DcrbHit& hit = dcrb_hits[hit_i];
         sum += hit.channel + hit.time_ticks + hit.rocid + hit.slot
              + hit.sector + hit.region + hit.superlayer;
     }
 
     m_checksum ^= sum;
     m_frames_seen++;
-    m_fadc_seen += frame.fadc_hit_count;
-    m_dcrb_seen += frame.dcrb_hit_count;
+    m_fadc_seen += ref->FadcCount();
+    m_dcrb_seen += ref->DcrbCount();
 }
 
 void SroNullWriter::Finish() {
