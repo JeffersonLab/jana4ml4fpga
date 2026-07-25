@@ -3,14 +3,27 @@
 #include <JANA/JApplication.h>
 #include <JANA/JEvent.h>
 
+#include <ROOT/REntry.hxx>
+#include <ROOT/RNTupleFillContext.hxx>
+#include <ROOT/RNTupleFillStatus.hxx>
 #include <ROOT/RNTupleModel.hxx>
+#include <ROOT/RNTupleParallelWriter.hxx>
 #include <ROOT/RNTupleWriteOptions.hxx>
-#include <ROOT/RNTupleWriter.hxx>
 #include <TFile.h>
 
 #include "SroFrameRef.h"
 
-struct SroRNTupleWriter::Fields {
+// One thread's private fill state: a fill context + entry per table, plus the
+// typed pointers bound into each entry. Created lazily on the thread's first
+// frame; owned by the writer's registry so Finish can flush them all.
+struct SroRNTupleWriter::ThreadContexts {
+    std::shared_ptr<ROOT::RNTupleFillContext> frames_ctx;
+    std::shared_ptr<ROOT::RNTupleFillContext> fadc_ctx;
+    std::shared_ptr<ROOT::RNTupleFillContext> dcrb_ctx;
+    std::unique_ptr<ROOT::REntry> frames_entry;
+    std::unique_ptr<ROOT::REntry> fadc_entry;
+    std::unique_ptr<ROOT::REntry> dcrb_entry;
+
     // frames table
     std::shared_ptr<std::uint32_t> frame_number;
     std::shared_ptr<std::uint64_t> timestamp;
@@ -38,6 +51,18 @@ struct SroRNTupleWriter::Fields {
     std::shared_ptr<std::int8_t> dcrb_sector;
     std::shared_ptr<std::int8_t> dcrb_region;
     std::shared_ptr<std::int8_t> dcrb_superlayer;
+
+    // Fill one entry; when the cluster is due, compress outside the file lock
+    // and commit under it (the shared TFile is not thread-safe).
+    void Fill(ROOT::RNTupleFillContext& context, ROOT::REntry& entry, std::mutex& file_mutex) {
+        ROOT::RNTupleFillStatus status;
+        context.FillNoFlush(entry, status);
+        if (status.ShouldFlushCluster()) {
+            context.FlushColumns();
+            std::lock_guard<std::mutex> lock(file_mutex);
+            context.FlushCluster();
+        }
+    }
 };
 
 SroRNTupleWriter::SroRNTupleWriter() {
@@ -53,7 +78,6 @@ void SroRNTupleWriter::Init() {
     if (m_file == nullptr || m_file->IsZombie()) {
         throw JException("SroRNTupleWriter: cannot create output file %s", m_output_path.c_str());
     }
-    m_fields = std::make_unique<Fields>();
 
     ROOT::RNTupleWriteOptions write_options;
     if (m_compression >= 0) {
@@ -61,91 +85,142 @@ void SroRNTupleWriter::Init() {
     }
 
     auto frames_model = ROOT::RNTupleModel::Create();
-    m_fields->frame_number = frames_model->MakeField<std::uint32_t>("frame_number");
-    m_fields->timestamp = frames_model->MakeField<std::uint64_t>("timestamp");
-    m_fields->block_number = frames_model->MakeField<std::uint32_t>("block_number");
-    m_fields->n_fadc_hits = frames_model->MakeField<std::uint32_t>("n_fadc_hits");
-    m_fields->n_dcrb_hits = frames_model->MakeField<std::uint32_t>("n_dcrb_hits");
-    m_frames_writer = ROOT::RNTupleWriter::Append(std::move(frames_model), "frames", *m_file, write_options);
+    frames_model->MakeField<std::uint32_t>("frame_number");
+    frames_model->MakeField<std::uint64_t>("timestamp");
+    frames_model->MakeField<std::uint32_t>("block_number");
+    frames_model->MakeField<std::uint32_t>("n_fadc_hits");
+    frames_model->MakeField<std::uint32_t>("n_dcrb_hits");
+    m_frames_writer = ROOT::RNTupleParallelWriter::Append(std::move(frames_model), "frames", *m_file, write_options);
 
     auto fadc_model = ROOT::RNTupleModel::Create();
-    m_fields->fadc_frame_number = fadc_model->MakeField<std::uint32_t>("frame_number");
-    m_fields->fadc_rocid = fadc_model->MakeField<std::uint16_t>("rocid");
-    m_fields->fadc_slot = fadc_model->MakeField<std::uint8_t>("slot");
-    m_fields->fadc_channel = fadc_model->MakeField<std::uint8_t>("channel");
-    m_fields->fadc_charge = fadc_model->MakeField<std::uint16_t>("charge");
-    m_fields->fadc_time = fadc_model->MakeField<std::uint16_t>("time_ticks");
-    m_fields->fadc_detector = fadc_model->MakeField<std::int8_t>("detector");
-    m_fields->fadc_sector = fadc_model->MakeField<std::int8_t>("sector");
-    m_fields->fadc_io = fadc_model->MakeField<std::int8_t>("io");
-    m_fields->fadc_view = fadc_model->MakeField<std::int8_t>("view");
-    m_fields->fadc_strip = fadc_model->MakeField<std::int16_t>("strip");
-    m_fadc_writer = ROOT::RNTupleWriter::Append(std::move(fadc_model), "fadc_hits", *m_file, write_options);
+    fadc_model->MakeField<std::uint32_t>("frame_number");
+    fadc_model->MakeField<std::uint16_t>("rocid");
+    fadc_model->MakeField<std::uint8_t>("slot");
+    fadc_model->MakeField<std::uint8_t>("channel");
+    fadc_model->MakeField<std::uint16_t>("charge");
+    fadc_model->MakeField<std::uint16_t>("time_ticks");
+    fadc_model->MakeField<std::int8_t>("detector");
+    fadc_model->MakeField<std::int8_t>("sector");
+    fadc_model->MakeField<std::int8_t>("io");
+    fadc_model->MakeField<std::int8_t>("view");
+    fadc_model->MakeField<std::int16_t>("strip");
+    m_fadc_writer = ROOT::RNTupleParallelWriter::Append(std::move(fadc_model), "fadc_hits", *m_file, write_options);
 
     auto dcrb_model = ROOT::RNTupleModel::Create();
-    m_fields->dcrb_frame_number = dcrb_model->MakeField<std::uint32_t>("frame_number");
-    m_fields->dcrb_rocid = dcrb_model->MakeField<std::uint16_t>("rocid");
-    m_fields->dcrb_slot = dcrb_model->MakeField<std::uint8_t>("slot");
-    m_fields->dcrb_channel = dcrb_model->MakeField<std::uint8_t>("channel");
-    m_fields->dcrb_time = dcrb_model->MakeField<std::uint16_t>("time_ticks");
-    m_fields->dcrb_sector = dcrb_model->MakeField<std::int8_t>("sector");
-    m_fields->dcrb_region = dcrb_model->MakeField<std::int8_t>("region");
-    m_fields->dcrb_superlayer = dcrb_model->MakeField<std::int8_t>("superlayer");
-    m_dcrb_writer = ROOT::RNTupleWriter::Append(std::move(dcrb_model), "dcrb_hits", *m_file, write_options);
+    dcrb_model->MakeField<std::uint32_t>("frame_number");
+    dcrb_model->MakeField<std::uint16_t>("rocid");
+    dcrb_model->MakeField<std::uint8_t>("slot");
+    dcrb_model->MakeField<std::uint8_t>("channel");
+    dcrb_model->MakeField<std::uint16_t>("time_ticks");
+    dcrb_model->MakeField<std::int8_t>("sector");
+    dcrb_model->MakeField<std::int8_t>("region");
+    dcrb_model->MakeField<std::int8_t>("superlayer");
+    m_dcrb_writer = ROOT::RNTupleParallelWriter::Append(std::move(dcrb_model), "dcrb_hits", *m_file, write_options);
 }
 
-void SroRNTupleWriter::ProcessSequential(const JEvent& event) {
+SroRNTupleWriter::ThreadContexts& SroRNTupleWriter::GetThreadContexts() {
+    static thread_local ThreadContexts* cached = nullptr; // one writer instance per process
+    if (cached != nullptr) {
+        return *cached;
+    }
+    auto contexts = std::make_unique<ThreadContexts>();
+    {
+        std::lock_guard<std::mutex> lock(m_file_mutex);
+        contexts->frames_ctx = m_frames_writer->CreateFillContext();
+        contexts->fadc_ctx = m_fadc_writer->CreateFillContext();
+        contexts->dcrb_ctx = m_dcrb_writer->CreateFillContext();
+    }
+    contexts->frames_entry = contexts->frames_ctx->CreateEntry();
+    contexts->fadc_entry = contexts->fadc_ctx->CreateEntry();
+    contexts->dcrb_entry = contexts->dcrb_ctx->CreateEntry();
+
+    contexts->frame_number = contexts->frames_entry->GetPtr<std::uint32_t>("frame_number");
+    contexts->timestamp = contexts->frames_entry->GetPtr<std::uint64_t>("timestamp");
+    contexts->block_number = contexts->frames_entry->GetPtr<std::uint32_t>("block_number");
+    contexts->n_fadc_hits = contexts->frames_entry->GetPtr<std::uint32_t>("n_fadc_hits");
+    contexts->n_dcrb_hits = contexts->frames_entry->GetPtr<std::uint32_t>("n_dcrb_hits");
+
+    contexts->fadc_frame_number = contexts->fadc_entry->GetPtr<std::uint32_t>("frame_number");
+    contexts->fadc_rocid = contexts->fadc_entry->GetPtr<std::uint16_t>("rocid");
+    contexts->fadc_slot = contexts->fadc_entry->GetPtr<std::uint8_t>("slot");
+    contexts->fadc_channel = contexts->fadc_entry->GetPtr<std::uint8_t>("channel");
+    contexts->fadc_charge = contexts->fadc_entry->GetPtr<std::uint16_t>("charge");
+    contexts->fadc_time = contexts->fadc_entry->GetPtr<std::uint16_t>("time_ticks");
+    contexts->fadc_detector = contexts->fadc_entry->GetPtr<std::int8_t>("detector");
+    contexts->fadc_sector = contexts->fadc_entry->GetPtr<std::int8_t>("sector");
+    contexts->fadc_io = contexts->fadc_entry->GetPtr<std::int8_t>("io");
+    contexts->fadc_view = contexts->fadc_entry->GetPtr<std::int8_t>("view");
+    contexts->fadc_strip = contexts->fadc_entry->GetPtr<std::int16_t>("strip");
+
+    contexts->dcrb_frame_number = contexts->dcrb_entry->GetPtr<std::uint32_t>("frame_number");
+    contexts->dcrb_rocid = contexts->dcrb_entry->GetPtr<std::uint16_t>("rocid");
+    contexts->dcrb_slot = contexts->dcrb_entry->GetPtr<std::uint8_t>("slot");
+    contexts->dcrb_channel = contexts->dcrb_entry->GetPtr<std::uint8_t>("channel");
+    contexts->dcrb_time = contexts->dcrb_entry->GetPtr<std::uint16_t>("time_ticks");
+    contexts->dcrb_sector = contexts->dcrb_entry->GetPtr<std::int8_t>("sector");
+    contexts->dcrb_region = contexts->dcrb_entry->GetPtr<std::int8_t>("region");
+    contexts->dcrb_superlayer = contexts->dcrb_entry->GetPtr<std::int8_t>("superlayer");
+
+    std::lock_guard<std::mutex> lock(m_registry_mutex);
+    m_thread_contexts.push_back(std::move(contexts));
+    cached = m_thread_contexts.back().get();
+    return *cached;
+}
+
+void SroRNTupleWriter::ProcessParallel(const JEvent& event) {
     const auto* ref = event.GetSingle<SroFrameRef>();
     const sro::SroBlockData& block = *ref->block;
     const sro::FrameInfo& frame = ref->Frame();
+    ThreadContexts& ctx = GetThreadContexts();
 
-    std::lock_guard<std::mutex> lock(m_mutex);
-
-    *m_fields->frame_number = frame.frame_number;
-    *m_fields->timestamp = frame.timestamp;
-    *m_fields->block_number = block.block_number;
-    *m_fields->n_fadc_hits = ref->FadcCount();
-    *m_fields->n_dcrb_hits = ref->DcrbCount();
-    m_frames_writer->Fill();
+    *ctx.frame_number = frame.frame_number;
+    *ctx.timestamp = frame.timestamp;
+    *ctx.block_number = block.block_number;
+    *ctx.n_fadc_hits = ref->FadcCount();
+    *ctx.n_dcrb_hits = ref->DcrbCount();
+    ctx.Fill(*ctx.frames_ctx, *ctx.frames_entry, m_file_mutex);
 
     const sro::FadcHit* fadc_hits = ref->FadcHits();
     for (uint32_t hit_i = 0; hit_i < ref->FadcCount(); hit_i++) {
         const sro::FadcHit& hit = fadc_hits[hit_i];
-        *m_fields->fadc_frame_number = frame.frame_number;
-        *m_fields->fadc_rocid = hit.rocid;
-        *m_fields->fadc_slot = hit.slot;
-        *m_fields->fadc_channel = hit.channel;
-        *m_fields->fadc_charge = hit.charge;
-        *m_fields->fadc_time = hit.time_ticks;
-        *m_fields->fadc_detector = hit.detector;
-        *m_fields->fadc_sector = hit.sector;
-        *m_fields->fadc_io = hit.io;
-        *m_fields->fadc_view = hit.view;
-        *m_fields->fadc_strip = hit.strip;
-        m_fadc_writer->Fill();
+        *ctx.fadc_frame_number = frame.frame_number;
+        *ctx.fadc_rocid = hit.rocid;
+        *ctx.fadc_slot = hit.slot;
+        *ctx.fadc_channel = hit.channel;
+        *ctx.fadc_charge = hit.charge;
+        *ctx.fadc_time = hit.time_ticks;
+        *ctx.fadc_detector = hit.detector;
+        *ctx.fadc_sector = hit.sector;
+        *ctx.fadc_io = hit.io;
+        *ctx.fadc_view = hit.view;
+        *ctx.fadc_strip = hit.strip;
+        ctx.Fill(*ctx.fadc_ctx, *ctx.fadc_entry, m_file_mutex);
     }
 
     const sro::DcrbHit* dcrb_hits = ref->DcrbHits();
     for (uint32_t hit_i = 0; hit_i < ref->DcrbCount(); hit_i++) {
         const sro::DcrbHit& hit = dcrb_hits[hit_i];
-        *m_fields->dcrb_frame_number = frame.frame_number;
-        *m_fields->dcrb_rocid = hit.rocid;
-        *m_fields->dcrb_slot = hit.slot;
-        *m_fields->dcrb_channel = hit.channel;
-        *m_fields->dcrb_time = hit.time_ticks;
-        *m_fields->dcrb_sector = hit.sector;
-        *m_fields->dcrb_region = hit.region;
-        *m_fields->dcrb_superlayer = hit.superlayer;
-        m_dcrb_writer->Fill();
+        *ctx.dcrb_frame_number = frame.frame_number;
+        *ctx.dcrb_rocid = hit.rocid;
+        *ctx.dcrb_slot = hit.slot;
+        *ctx.dcrb_channel = hit.channel;
+        *ctx.dcrb_time = hit.time_ticks;
+        *ctx.dcrb_sector = hit.sector;
+        *ctx.dcrb_region = hit.region;
+        *ctx.dcrb_superlayer = hit.superlayer;
+        ctx.Fill(*ctx.dcrb_ctx, *ctx.dcrb_entry, m_file_mutex);
     }
 
-    m_frames_written++;
-    m_fadc_written += ref->FadcCount();
-    m_dcrb_written += ref->DcrbCount();
+    m_frames_written.fetch_add(1, std::memory_order_relaxed);
+    m_fadc_written.fetch_add(ref->FadcCount(), std::memory_order_relaxed);
+    m_dcrb_written.fetch_add(ref->DcrbCount(), std::memory_order_relaxed);
 }
 
 void SroRNTupleWriter::Finish() {
-    // Writers flush and commit on destruction; they must go before the TFile closes.
+    // Destruction order commits everything: fill contexts flush their last
+    // clusters (Finish runs single-threaded, so no lock contention), then the
+    // parallel writers commit datasets, then the TFile closes.
+    m_thread_contexts.clear();
     m_frames_writer.reset();
     m_fadc_writer.reset();
     m_dcrb_writer.reset();
@@ -153,6 +228,6 @@ void SroRNTupleWriter::Finish() {
         m_file->Close();
         m_file.reset();
     }
-    LOG_INFO(GetLogger()) << "SroRNTupleWriter: wrote " << m_frames_written << " frames, "
-                          << m_fadc_written << " fadc_hits, " << m_dcrb_written << " dcrb_hits to " << m_output_path << LOG_END;
+    LOG_INFO(GetLogger()) << "SroRNTupleWriter: wrote " << m_frames_written.load() << " frames, "
+                          << m_fadc_written.load() << " fadc_hits, " << m_dcrb_written.load() << " dcrb_hits to " << m_output_path << LOG_END;
 }
