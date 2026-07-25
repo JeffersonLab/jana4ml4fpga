@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -32,6 +33,7 @@ private:
     struct Fields; // shared_ptr handles bound to the RNTuple models
 
     std::string m_output_path = "/data/evio-optim/phase1/sro_hits.root";
+    int32_t m_compression = -1; // evio6_file:compression - ROOT setting; -1 keeps the ROOT default
     std::unique_ptr<TFile> m_file;
     std::unique_ptr<ROOT::RNTupleWriter> m_frames_writer;
     std::unique_ptr<ROOT::RNTupleWriter> m_fadc_writer;

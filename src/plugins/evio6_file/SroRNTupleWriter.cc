@@ -4,6 +4,7 @@
 #include <JANA/JEvent.h>
 
 #include <ROOT/RNTupleModel.hxx>
+#include <ROOT/RNTupleWriteOptions.hxx>
 #include <ROOT/RNTupleWriter.hxx>
 #include <TFile.h>
 
@@ -46,6 +47,7 @@ SroRNTupleWriter::SroRNTupleWriter() {
 
 void SroRNTupleWriter::Init() {
     GetApplication()->SetDefaultParameter("evio6_file:output_file", m_output_path, "Output ROOT file with frames/fadc_hits/dcrb_hits RNTuples");
+    GetApplication()->SetDefaultParameter("evio6_file:compression", m_compression, "ROOT compression setting for the output RNTuples (-1 = ROOT default, 0 = none, 501 = zstd-1, 505 = zstd-5)");
 
     m_file.reset(TFile::Open(m_output_path.c_str(), "RECREATE"));
     if (m_file == nullptr || m_file->IsZombie()) {
@@ -53,13 +55,18 @@ void SroRNTupleWriter::Init() {
     }
     m_fields = std::make_unique<Fields>();
 
+    ROOT::RNTupleWriteOptions write_options;
+    if (m_compression >= 0) {
+        write_options.SetCompression(static_cast<std::uint32_t>(m_compression));
+    }
+
     auto frames_model = ROOT::RNTupleModel::Create();
     m_fields->frame_number = frames_model->MakeField<std::uint32_t>("frame_number");
     m_fields->timestamp = frames_model->MakeField<std::uint64_t>("timestamp");
     m_fields->block_number = frames_model->MakeField<std::uint32_t>("block_number");
     m_fields->n_fadc_hits = frames_model->MakeField<std::uint32_t>("n_fadc_hits");
     m_fields->n_dcrb_hits = frames_model->MakeField<std::uint32_t>("n_dcrb_hits");
-    m_frames_writer = ROOT::RNTupleWriter::Append(std::move(frames_model), "frames", *m_file);
+    m_frames_writer = ROOT::RNTupleWriter::Append(std::move(frames_model), "frames", *m_file, write_options);
 
     auto fadc_model = ROOT::RNTupleModel::Create();
     m_fields->fadc_frame_number = fadc_model->MakeField<std::uint32_t>("frame_number");
@@ -73,7 +80,7 @@ void SroRNTupleWriter::Init() {
     m_fields->fadc_io = fadc_model->MakeField<std::int8_t>("io");
     m_fields->fadc_view = fadc_model->MakeField<std::int8_t>("view");
     m_fields->fadc_strip = fadc_model->MakeField<std::int16_t>("strip");
-    m_fadc_writer = ROOT::RNTupleWriter::Append(std::move(fadc_model), "fadc_hits", *m_file);
+    m_fadc_writer = ROOT::RNTupleWriter::Append(std::move(fadc_model), "fadc_hits", *m_file, write_options);
 
     auto dcrb_model = ROOT::RNTupleModel::Create();
     m_fields->dcrb_frame_number = dcrb_model->MakeField<std::uint32_t>("frame_number");
@@ -84,7 +91,7 @@ void SroRNTupleWriter::Init() {
     m_fields->dcrb_sector = dcrb_model->MakeField<std::int8_t>("sector");
     m_fields->dcrb_region = dcrb_model->MakeField<std::int8_t>("region");
     m_fields->dcrb_superlayer = dcrb_model->MakeField<std::int8_t>("superlayer");
-    m_dcrb_writer = ROOT::RNTupleWriter::Append(std::move(dcrb_model), "dcrb_hits", *m_file);
+    m_dcrb_writer = ROOT::RNTupleWriter::Append(std::move(dcrb_model), "dcrb_hits", *m_file, write_options);
 }
 
 void SroRNTupleWriter::ProcessSequential(const JEvent& event) {
