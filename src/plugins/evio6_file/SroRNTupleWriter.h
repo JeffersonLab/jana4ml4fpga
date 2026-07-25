@@ -21,6 +21,8 @@
 
 #include <JANA/JEventProcessor.h>
 
+#include <libraries/evio_sro_parser/SroData.h>
+
 class TFile;
 namespace ROOT {
 class RNTupleParallelWriter;
@@ -47,6 +49,8 @@ private:
     std::unique_ptr<ROOT::RNTupleParallelWriter> m_dcrb_writer;
     std::mutex m_file_mutex;     // serializes all TFile interaction (commits, context creation)
     std::mutex m_registry_mutex; // protects m_thread_contexts
+    std::mutex m_decode_stats_mutex;
+    sro::ParseStats m_decode_stats; // anomalies from EnsureDecoded (lazy mode)
     std::vector<std::unique_ptr<ThreadContexts>> m_thread_contexts;
     std::atomic<uint64_t> m_frames_written{0};
     std::atomic<uint64_t> m_fadc_written{0};

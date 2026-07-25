@@ -168,9 +168,15 @@ SroRNTupleWriter::ThreadContexts& SroRNTupleWriter::GetThreadContexts() {
 }
 
 void SroRNTupleWriter::ProcessParallel(const JEvent& event) {
-    const auto* ref = event.GetSingle<SroFrameRef>();
+    auto* ref = const_cast<SroFrameRef*>(event.GetSingle<SroFrameRef>());
     const sro::SroBlockData& block = *ref->block;
     const sro::FrameInfo& frame = ref->Frame();
+    sro::ParseStats decode_stats;
+    ref->EnsureDecoded(decode_stats);
+    if (decode_stats.structure_errors > 0) {
+        std::lock_guard<std::mutex> lock(m_decode_stats_mutex);
+        m_decode_stats.Add(decode_stats);
+    }
     ThreadContexts& ctx = GetThreadContexts();
 
     *ctx.frame_number = frame.frame_number;
@@ -227,6 +233,9 @@ void SroRNTupleWriter::Finish() {
     if (m_file != nullptr) {
         m_file->Close();
         m_file.reset();
+    }
+    if (m_decode_stats.structure_errors > 0) {
+        LOG_WARN(GetLogger()) << "SroRNTupleWriter: deferred decode structure errors: " << m_decode_stats.ToString() << LOG_END;
     }
     LOG_INFO(GetLogger()) << "SroRNTupleWriter: wrote " << m_frames_written.load() << " frames, "
                           << m_fadc_written.load() << " fadc_hits, " << m_dcrb_written.load() << " dcrb_hits to " << m_output_path << LOG_END;

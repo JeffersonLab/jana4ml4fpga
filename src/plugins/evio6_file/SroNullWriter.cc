@@ -9,11 +9,11 @@ SroNullWriter::SroNullWriter() {
     SetCallbackStyle(CallbackStyle::ExpertMode);
 }
 
-void SroNullWriter::ProcessSequential(const JEvent& event) {
-    const auto* ref = event.GetSingle<SroFrameRef>();
+void SroNullWriter::ProcessParallel(const JEvent& event) {
+    auto* ref = const_cast<SroFrameRef*>(event.GetSingle<SroFrameRef>());
     const sro::FrameInfo& frame = ref->Frame();
-
-    std::lock_guard<std::mutex> lock(m_mutex);
+    sro::ParseStats decode_stats;
+    ref->EnsureDecoded(decode_stats);
 
     uint64_t sum = frame.frame_number + frame.timestamp;
     const sro::FadcHit* fadc_hits = ref->FadcHits();
@@ -29,15 +29,15 @@ void SroNullWriter::ProcessSequential(const JEvent& event) {
              + hit.sector + hit.region + hit.superlayer;
     }
 
-    m_checksum ^= sum;
-    m_frames_seen++;
-    m_fadc_seen += ref->FadcCount();
-    m_dcrb_seen += ref->DcrbCount();
+    m_checksum.fetch_xor(sum, std::memory_order_relaxed);
+    m_frames_seen.fetch_add(1, std::memory_order_relaxed);
+    m_fadc_seen.fetch_add(ref->FadcCount(), std::memory_order_relaxed);
+    m_dcrb_seen.fetch_add(ref->DcrbCount(), std::memory_order_relaxed);
 }
 
 void SroNullWriter::Finish() {
     // Same log format as SroRNTupleWriter so record_perf.py parses either writer.
-    LOG_INFO(GetLogger()) << "SroNullWriter: wrote " << m_frames_seen << " frames, "
-                          << m_fadc_seen << " fadc_hits, " << m_dcrb_seen
-                          << " dcrb_hits to /dev/null (checksum=" << m_checksum << ")" << LOG_END;
+    LOG_INFO(GetLogger()) << "SroNullWriter: wrote " << m_frames_seen.load() << " frames, "
+                          << m_fadc_seen.load() << " fadc_hits, " << m_dcrb_seen.load()
+                          << " dcrb_hits to /dev/null (checksum=" << m_checksum.load() << ")" << LOG_END;
 }

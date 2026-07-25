@@ -48,6 +48,5 @@ private:
     uint32_t m_next_frame = 0;         // cursor within current parent; child_idx==0 marks a new parent
     uint64_t m_frames_seen = 0;
     uint64_t m_frames_emitted = 0;
-    sro::ParseStats m_deferred_stats;  // anomalies from per-selected-frame deferred decoding (lazy mode)
     sro::ParseStats m_parse_stats;     // aggregated block parse stats (parse runs in Preprocess in lazy mode)
 };
