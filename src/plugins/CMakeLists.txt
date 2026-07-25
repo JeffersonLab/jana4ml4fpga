@@ -6,6 +6,7 @@
 # plugins no longer build.
 
 # --- active plugins ---
+add_subdirectory(evio6_file)    # SRO streaming source: block->frames unfolder + RNTuple writer
 add_subdirectory(CDAQfile)      # serial EVIO file source (fallback)
 add_subdirectory(CDAQfileMT)    # mmap/parallel EVIO file source
 add_subdirectory(flat_tree)     # events TTree writer
