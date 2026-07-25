@@ -25,6 +25,7 @@ public:
     SroFrameUnfolder();
 
     void Init() override;
+    void Preprocess(const JEvent& parent) const override;
     Result Unfold(const JEvent& parent, JEvent& child, int child_idx) override;
     void Finish() override;
 
@@ -48,4 +49,5 @@ private:
     uint64_t m_frames_seen = 0;
     uint64_t m_frames_emitted = 0;
     sro::ParseStats m_deferred_stats;  // anomalies from per-selected-frame deferred decoding (lazy mode)
+    sro::ParseStats m_parse_stats;     // aggregated block parse stats (parse runs in Preprocess in lazy mode)
 };

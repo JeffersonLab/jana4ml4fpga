@@ -35,11 +35,12 @@ JEventSource::Result EvioSroBlockSource::Emit(JEvent& event) {
     auto* block_data = new sro::SroBlockData();
     block_data->block_number = m_raw_block.block_number;
     if (m_parse_enabled && m_lazy_parse) {
-        // Lazy mode: the block keeps its raw body so deferred ROC banks stay
-        // decodable after selection; the reader reallocates on the next read.
+        // Lazy mode: only the read happens on the source thread. The block
+        // carries its raw body; SroFrameUnfolder::Preprocess parses it on the
+        // parallel map arrow (parse stats are logged by the unfolder).
         block_data->body_words = std::move(m_raw_block.words);
-        sro::ParseBlockBodyLazy(m_raw_block.event_count, *block_data);
-        m_run_stats.Add(block_data->stats);
+        block_data->event_count = m_raw_block.event_count;
+        block_data->parse_pending = true;
     } else if (m_parse_enabled) {
         sro::ParseBlockBody(m_raw_block.words.data(), m_raw_block.words.size(), m_raw_block.event_count, *block_data);
         m_run_stats.Add(block_data->stats);

@@ -87,11 +87,22 @@ bool SroFrameUnfolder::FramePassesFinder(const sro::SroBlockData& block, uint32_
     return true; // bypass
 }
 
+void SroFrameUnfolder::Preprocess(const JEvent& parent) const {
+    // Runs on the parallel TimesliceMap1 arrow, once per timeslice, before the
+    // sequential Unfold - this is where the lazy parse scales across threads.
+    auto* block = const_cast<sro::SroBlockData*>(parent.GetSingle<sro::SroBlockData>());
+    if (block->parse_pending) {
+        sro::ParseBlockBodyLazy(block->event_count, *block);
+        block->parse_pending = false;
+    }
+}
+
 JEventUnfolder::Result SroFrameUnfolder::Unfold(const JEvent& parent, JEvent& child, int child_idx) {
     const auto* block = parent.GetSingle<sro::SroBlockData>();
 
     if (child_idx == 0) {
         m_next_frame = 0; // child_idx resets to 0 exactly when JANA moves to a new parent
+        m_parse_stats.Add(block->stats);
     }
 
     // Advance the cursor to the next frame that passes the finder. In bypass
@@ -125,6 +136,7 @@ JEventUnfolder::Result SroFrameUnfolder::Unfold(const JEvent& parent, JEvent& ch
 void SroFrameUnfolder::Finish() {
     LOG_INFO(GetLogger()) << "SroFrameUnfolder: emitted " << m_frames_emitted << " of " << m_frames_seen
                           << " frames (finder=" << m_finder_mode << ")" << LOG_END;
+    LOG_INFO(GetLogger()) << "SroFrameUnfolder: parse stats: " << m_parse_stats.ToString() << LOG_END;
     if (m_deferred_stats.structure_errors > 0) {
         LOG_WARN(GetLogger()) << "SroFrameUnfolder: deferred decode stats: " << m_deferred_stats.ToString() << LOG_END;
     }

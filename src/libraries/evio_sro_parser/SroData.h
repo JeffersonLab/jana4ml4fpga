@@ -88,7 +88,9 @@ struct ParseStats {
 /// owns the raw block body so deferred_rocs ranges stay decodable.
 struct SroBlockData {
     uint32_t block_number = 0;
+    uint32_t event_count = 0;   ///< expected frame sets (block header); parse input
     bool lazy = false;
+    bool parse_pending = false; ///< body_words filled, parse deferred to the unfolder's Preprocess
     std::vector<FrameInfo> frames;
     std::vector<FadcHit> fadc_hits;
     std::vector<DcrbHit> dcrb_hits;
