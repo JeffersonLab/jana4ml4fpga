@@ -7,6 +7,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -88,13 +89,18 @@ struct ParseStats {
 /// owns the raw block body so deferred_rocs ranges stay decodable.
 struct SroBlockData {
     uint32_t block_number = 0;
-    uint32_t event_count = 0;   ///< expected frame sets (block header); parse input
+    uint32_t event_count = 0;    ///< expected frame sets (block header); parse input
+    uint32_t body_word_count = 0;
     bool lazy = false;
-    bool parse_pending = false; ///< body_words filled, parse deferred to the unfolder's Preprocess
+    bool parse_pending = false;  ///< raw body attached, parse deferred to the unfolder's Preprocess
     std::vector<FrameInfo> frames;
     std::vector<FadcHit> fadc_hits;
     std::vector<DcrbHit> dcrb_hits;
-    std::vector<uint32_t> body_words;
+    std::vector<uint32_t> body_words;      ///< owned raw body (fread reader)
+    const uint32_t* external_body = nullptr; ///< borrowed raw body (mmap reader)
+    std::shared_ptr<const void> body_owner;  ///< pins the file mapping while this block lives
+
+    const uint32_t* Body() const { return external_body != nullptr ? external_body : body_words.data(); }
     std::vector<DeferredRocBank> deferred_rocs;
     ParseStats stats;
 };

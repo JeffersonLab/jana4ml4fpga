@@ -1,6 +1,8 @@
-// Naive sequential reader of SRO evio files (the intentional Phase-I baseline:
-// plain fread, one thread, no mmap, no readahead - future readers get compared
-// against this).
+// Sequential reader of SRO evio files with two modes:
+//   fread (Phase-I baseline) - copies each block body into an owned buffer;
+//   mmap  - maps whole files read-only and returns pointers into the mapping
+//           (MADV_SEQUENTIAL). Zero copy; a block's mapping stays valid while
+//           any RawBlock/consumer holds the shared_ptr to it.
 //
 // File layout (measured, see space/notes/data-format-observed.md): a sequence of
 // blocks, each an 8-word header {len, block#, hdr_len=8, event_count, 0, version,
@@ -12,6 +14,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -19,21 +22,43 @@
 
 namespace sro {
 
+/// One input file mapped read-only. Destructor unmaps, so consumers keep the
+/// shared_ptr for as long as they dereference words inside the mapping.
+class MappedFile {
+public:
+    explicit MappedFile(const std::string& path); // throws std::runtime_error
+    ~MappedFile();
+    MappedFile(const MappedFile&) = delete;
+    MappedFile& operator=(const MappedFile&) = delete;
+
+    const uint32_t* Words() const { return static_cast<const uint32_t*>(m_base); }
+    size_t WordCount() const { return m_bytes / sizeof(uint32_t); }
+
+private:
+    void* m_base = nullptr;
+    size_t m_bytes = 0;
+};
+
 /// One evio block as read from disk: header fields + body words (header stripped).
-/// The words vector is reused across ReadNextBlock calls - hold no references
-/// across calls.
+/// `body`/`body_word_count` are valid in both reader modes. In fread mode they
+/// point into `words` (reused per ReadNextBlock call - hold no references across
+/// calls, or take the vector). In mmap mode they point into `mapping`, which
+/// keeps the words alive for whoever copies the shared_ptr.
 struct RawBlock {
     uint32_t block_number = 0;
     uint32_t event_count = 0;
     std::string source_file;
     std::vector<uint32_t> words;
+    const uint32_t* body = nullptr;
+    size_t body_word_count = 0;
+    std::shared_ptr<const MappedFile> mapping;
 };
 
 class SroBlockReader {
 public:
     /// Files are read back to back in the given order. Frame order across files
     /// does not matter in Phase I (files were written round-robin).
-    explicit SroBlockReader(std::vector<std::string> file_paths);
+    explicit SroBlockReader(std::vector<std::string> file_paths, bool use_mmap = false);
     ~SroBlockReader();
 
     SroBlockReader(const SroBlockReader&) = delete;
@@ -52,10 +77,16 @@ public:
 
 private:
     bool OpenNextFile();
+    bool ReadNextBlockFread(RawBlock& block);
+    bool ReadNextBlockMmap(RawBlock& block);
+    bool ValidateHeader(const uint32_t* header) const;
 
     std::vector<std::string> m_file_paths;
     size_t m_next_file_index = 0;
-    std::FILE* m_file = nullptr;
+    bool m_use_mmap = false;
+    std::FILE* m_file = nullptr;                    // fread mode
+    std::shared_ptr<const MappedFile> m_mapped;     // mmap mode: current file
+    size_t m_map_pos = 0;                           // mmap mode: word cursor
     std::string m_current_file;
     uint64_t m_truncated_tail_blocks = 0;
 };

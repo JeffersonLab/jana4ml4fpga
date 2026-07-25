@@ -67,7 +67,7 @@ int main(int argc, char** argv) {
 
     for (int64_t block_i = 0; block_i < max_blocks && reader.ReadNextBlock(raw); block_i++) {
         parsed.stats = sro::ParseStats();
-        uint32_t set_count = sro::ParseBlockBody(raw.words.data(), raw.words.size(), raw.event_count, parsed);
+        uint32_t set_count = sro::ParseBlockBody(raw.body, raw.body_word_count, raw.event_count, parsed);
         total_stats.Add(parsed.stats);
         total_frames += set_count;
         total_fadc += parsed.fadc_hits.size();

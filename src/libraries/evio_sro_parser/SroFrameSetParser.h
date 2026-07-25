@@ -26,9 +26,9 @@ uint32_t ParseBlockBody(const uint32_t* words, size_t word_count, uint32_t expec
 
 /// Lazy variant for the filtered chain: decodes only ECAL ROC banks (the finder
 /// input) and records every other ROC bank as a DeferredRocBank word range.
-/// Operates on out.body_words, which the caller fills first (the block body must
-/// outlive deferred decoding). Sets out.lazy = true.
-uint32_t ParseBlockBodyLazy(uint32_t expected_sets, SroBlockData& out);
+/// `words` must equal out.Body() and stay valid until deferred decoding is done
+/// (owned body_words, or a mapping pinned by out.body_owner). Sets out.lazy = true.
+uint32_t ParseBlockBodyLazy(const uint32_t* words, size_t word_count, uint32_t expected_sets, SroBlockData& out);
 
 /// Decodes the deferred ROC banks of one frame of a lazily parsed block,
 /// appending to the given vectors (hit frame_index is the block-level index).

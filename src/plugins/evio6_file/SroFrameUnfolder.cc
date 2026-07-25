@@ -92,7 +92,7 @@ void SroFrameUnfolder::Preprocess(const JEvent& parent) const {
     // sequential Unfold - this is where the lazy parse scales across threads.
     auto* block = const_cast<sro::SroBlockData*>(parent.GetSingle<sro::SroBlockData>());
     if (block->parse_pending) {
-        sro::ParseBlockBodyLazy(block->event_count, *block);
+        sro::ParseBlockBodyLazy(block->Body(), block->body_word_count, block->event_count, *block);
         block->parse_pending = false;
     }
 }

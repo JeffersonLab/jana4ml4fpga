@@ -13,7 +13,8 @@ EvioSroBlockSource::EvioSroBlockSource(std::string resource_name, JApplication* 
 void EvioSroBlockSource::Open() {
     GetApplication()->SetDefaultParameter("evio6_file:parse", m_parse_enabled, "false = read blocks but skip parsing (pure I/O measurement; no frames reach the output)");
     GetApplication()->SetDefaultParameter("evio6_file:lazy_parse", m_lazy_parse, "true = decode only ECAL ROC banks up front; the unfolder decodes the rest per selected frame (false = eager full decode)");
-    m_reader = std::make_unique<sro::SroBlockReader>(std::vector<std::string>{GetResourceName()});
+    GetApplication()->SetDefaultParameter("evio6_file:reader", m_reader_mode, "'fread' (copying baseline) or 'mmap' (zero-copy mapped input)");
+    m_reader = std::make_unique<sro::SroBlockReader>(std::vector<std::string>{GetResourceName()}, m_reader_mode == "mmap");
 }
 
 void EvioSroBlockSource::Close() {
@@ -36,13 +37,20 @@ JEventSource::Result EvioSroBlockSource::Emit(JEvent& event) {
     block_data->block_number = m_raw_block.block_number;
     if (m_parse_enabled && m_lazy_parse) {
         // Lazy mode: only the read happens on the source thread. The block
-        // carries its raw body; SroFrameUnfolder::Preprocess parses it on the
-        // parallel map arrow (parse stats are logged by the unfolder).
-        block_data->body_words = std::move(m_raw_block.words);
+        // carries its raw body - zero-copy from the mapping when mmap-read,
+        // otherwise by taking the fread buffer - and SroFrameUnfolder::
+        // Preprocess parses it on the parallel map arrow.
+        if (m_raw_block.mapping != nullptr) {
+            block_data->external_body = m_raw_block.body;
+            block_data->body_owner = m_raw_block.mapping;
+        } else {
+            block_data->body_words = std::move(m_raw_block.words);
+        }
+        block_data->body_word_count = static_cast<uint32_t>(m_raw_block.body_word_count);
         block_data->event_count = m_raw_block.event_count;
         block_data->parse_pending = true;
     } else if (m_parse_enabled) {
-        sro::ParseBlockBody(m_raw_block.words.data(), m_raw_block.words.size(), m_raw_block.event_count, *block_data);
+        sro::ParseBlockBody(m_raw_block.body, m_raw_block.body_word_count, m_raw_block.event_count, *block_data);
         m_run_stats.Add(block_data->stats);
     }
 

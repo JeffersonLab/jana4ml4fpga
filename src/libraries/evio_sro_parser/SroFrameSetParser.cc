@@ -269,16 +269,16 @@ uint32_t ParseBlockBody(const uint32_t* words, size_t word_count, uint32_t expec
     return WalkBlockBody(words, word_count, expected_sets, false, out);
 }
 
-uint32_t ParseBlockBodyLazy(uint32_t expected_sets, SroBlockData& out) {
+uint32_t ParseBlockBodyLazy(const uint32_t* words, size_t word_count, uint32_t expected_sets, SroBlockData& out) {
     out.lazy = true;
-    return WalkBlockBody(out.body_words.data(), out.body_words.size(), expected_sets, true, out);
+    return WalkBlockBody(words, word_count, expected_sets, true, out);
 }
 
 void DecodeDeferredFrame(const SroBlockData& block, uint32_t frame_index,
                          std::vector<FadcHit>& fadc_out, std::vector<DcrbHit>& dcrb_out,
                          ParseStats& stats) {
     const FrameInfo& frame = block.frames[frame_index];
-    const uint32_t* words = block.body_words.data();
+    const uint32_t* words = block.Body();
     HitSink sink{fadc_out, dcrb_out, stats};
     for (uint32_t roc_i = frame.first_deferred_roc; roc_i < frame.first_deferred_roc + frame.deferred_roc_count; roc_i++) {
         const DeferredRocBank& deferred = block.deferred_rocs[roc_i];

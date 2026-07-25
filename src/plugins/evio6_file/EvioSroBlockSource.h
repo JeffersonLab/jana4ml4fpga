@@ -29,4 +29,5 @@ private:
     uint64_t m_blocks_read = 0;
     bool m_parse_enabled = true;  // evio6_file:parse - off = pure file I/O measurement
     bool m_lazy_parse = false;    // evio6_file:lazy_parse - decode ECAL only, defer the rest per selected frame
+    std::string m_reader_mode = "fread"; // evio6_file:reader - fread | mmap
 };
