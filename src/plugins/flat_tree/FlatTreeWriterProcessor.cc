@@ -61,19 +61,57 @@ void FlatTreeWriterProcessor::Init() {
     app->SetDefaultParameter("flat_tree:mt_output", m_mt_output,
                              "Events-tree output file for multithreaded mode. "
                              "Empty = <histsfile without .root>_events.root");
-    app->SetDefaultParameter("flat_tree:flush_events", m_flush_events,
-                             "MT mode: per-thread fills between TBufferMerger flushes");
+    // --- Branch group selection (see flatio::FlatIoConfig for sizes) ------------
+    // Defaults match what the analysis/DQM actually reads; srs_raw and
+    // srs_prerecon are off because nobody uses them and together they cost
+    // ~11 kB/event (~110 GB over a 10M-event run). Turn any group back on with
+    // -Pflat_tree:write_<group>=1.
+    app->SetDefaultParameter("flat_tree:write_srs_raw", m_io_config.srs_raw,
+                             "Write srs_raw_* branches (raw SRS samples, ~50 kB/event)");
+    app->SetDefaultParameter("flat_tree:write_gem_samples", m_io_config.gem_samples,
+                             "Write gem_sample_data_* branches (per-sample GEM diagnostics, "
+                             "~300 kB/event - the largest group by far)");
+    app->SetDefaultParameter("flat_tree:gem_samples_max_events", m_gem_samples_max_events,
+                             "Write gem_sample_data_* only for the first N events "
+                             "(0 = every event). Use this to keep per-sample diagnostics "
+                             "for plotting on a subset without paying ~300 kB for every "
+                             "event of a full run");
+    app->SetDefaultParameter("flat_tree:gem_samples_signal_only", m_gem_samples_signal_only,
+                             "Write only gem_sample_data samples above the n-sigma noise "
+                             "threshold (~1.2% of them on run 8169). Keeps the signal for "
+                             "every event at ~1% of the size; drops the baseline samples "
+                             "that pedestal studies need");
+    app->SetDefaultParameter("flat_tree:write_gem_clusters", m_io_config.gem_clusters,
+                             "Write gem_scluster_* branches (GEM cluster reconstruction)");
+    app->SetDefaultParameter("flat_tree:write_gem_peaks", m_io_config.gem_peaks,
+                             "Write gem_peak_* branches (GEM plane peaks)");
+    app->SetDefaultParameter("flat_tree:write_gem_prerecon", m_io_config.gem_prerecon,
+                             "Write srs_prerecon_* branches (decoded per-plane data)");
+    app->SetDefaultParameter("flat_tree:write_f125_raw", m_io_config.f125_raw,
+                             "Write f125_wraw_* branches (raw FA125 window data)");
+    app->SetDefaultParameter("flat_tree:write_f250_raw", m_io_config.f250_raw,
+                             "Write f250_wraw_* branches (raw FA250 window data)");
+    app->SetDefaultParameter("flat_tree:write_f125_pulse", m_io_config.f125_pulse,
+                             "Write f125_pulse_* branches");
+    app->SetDefaultParameter("flat_tree:write_f250_pulse", m_io_config.f250_pulse,
+                             "Write f250_pulse_* branches");
+    app->SetDefaultParameter("flat_tree:write_fpga", m_io_config.fpga,
+                             "Write fpga_* branches. Off by default: the 'fpgacon' plugin "
+                             "is retired, so these are written empty for every event");
 
     // Output compression for the events tree. In MT mode every thread's buffers
     // are funneled through TBufferMerger's single writer thread, which compresses
     // on the way to disk - ROOT's default ZLIB is CPU-heavy and becomes the
     // throughput cap for the large raw-SRS payload (~60 kB/event). LZ4 is much
     // cheaper to compress (slightly bigger files) so the writer keeps up.
-    // Value is algo*100+level: 404=LZ4:4 (default), 101=ZLIB:1, 505=ZSTD:5, 0=none.
-    int compression = ROOT::CompressionSettings(ROOT::RCompressionSetting::EAlgorithm::kLZ4, 4);
+    // Value is algo*100+level. ZSTD:5 is the default: it compresses better than
+    // ROOT's default ZLIB while being several times faster, which matters on both
+    // axes here (writer-thread throughput AND output size). Use LZ4 (404) if you
+    // are purely throughput-bound and have disk to spare.
+    int compression = ROOT::CompressionSettings(ROOT::RCompressionSetting::EAlgorithm::kZSTD, 5);
     app->SetDefaultParameter("flat_tree:compression", compression,
                              "ROOT compression for the events tree "
-                             "(algo*100+level; 404=LZ4:4, 101=ZLIB:1, 505=ZSTD:5, 0=none)");
+                             "(algo*100+level; 505=ZSTD:5, 404=LZ4:4, 101=ZLIB:1, 0=none)");
 
     m_mt_mode = (nthreads_str != "1") || !m_mt_output.empty();
 
@@ -98,13 +136,32 @@ void FlatTreeWriterProcessor::Init() {
         file->cd();
         m_main_dir = gDirectory;
 
-        auto ctx = std::make_unique<WriterCtx>();
+        auto ctx = std::make_unique<WriterCtx>(m_io_config);
         ctx->tree = new TTree("events", "jana4ml4fpga_tree_v1");
         ctx->tree->SetDirectory(m_main_dir);
         ctx->io.bindToTree(ctx->tree);
         m_legacy_ctx = ctx.get();
         m_contexts.push_back(std::move(ctx));
         m_log->info("Single-thread writer mode: events tree in shared hists file");
+    }
+
+    // Report the enabled groups: output size is dominated by srs_raw and
+    // gem_sample_data, so make it obvious which of them this run is paying for.
+    m_log->info("Events tree branch groups: srs_raw={} gem_samples={} gem_clusters={} "
+                "gem_peaks={} gem_prerecon={} f125_raw={} f250_raw={} f125_pulse={} "
+                "f250_pulse={} fpga={} (compression={})",
+                m_io_config.srs_raw, m_io_config.gem_samples, m_io_config.gem_clusters,
+                m_io_config.gem_peaks, m_io_config.gem_prerecon, m_io_config.f125_raw,
+                m_io_config.f250_raw, m_io_config.f125_pulse, m_io_config.f250_pulse,
+                m_io_config.fpga, compression);
+    if (m_io_config.gem_samples && m_gem_samples_max_events == 0) {
+        m_log->warn("gem_sample_data is being written for EVERY event (~76 kB/event, "
+                    "~760 GB per 10M events). Set -Pflat_tree:gem_samples_max_events=N "
+                    "to keep it only for the first N events.");
+    }
+    if (m_io_config.srs_raw || m_io_config.gem_prerecon) {
+        m_log->info("srs_raw/srs_prerecon are enabled (~4/~7 kB per event). They are "
+                    "off by default because the standard analysis does not read them.");
     }
 
     m_log->info("Initialization is done");
@@ -121,7 +178,7 @@ FlatTreeWriterProcessor::WriterCtx& FlatTreeWriterProcessor::GetCtx() {
     static thread_local WriterCtx* tl_ctx = nullptr;
     if (tl_ctx) return *tl_ctx;
 
-    auto ctx = std::make_unique<WriterCtx>();
+    auto ctx = std::make_unique<WriterCtx>(m_io_config);
     ctx->file = m_merger->GetFile();  // thread-safe
     ctx->tree = new TTree("events", "jana4ml4fpga_tree_v1");
     ctx->tree->SetDirectory(ctx->file.get());
@@ -171,29 +228,33 @@ void FlatTreeWriterProcessor::Process(const std::shared_ptr<const JEvent> &event
         const std::string &obj_name = factory->GetObjectName();
         auto obj_num = factory->GetNumObjects();
 
+        // NOTE: the has_* flags record what the EVENT contains and gate the
+        // reconstruction blocks below - they must be set even when the
+        // corresponding raw branch group is switched off, otherwise disabling
+        // e.g. srs_raw would silently disable GEM reconstruction too.
         if (JTypeInfo::demangle<Df125FDCPulse>() == obj_name && obj_num > 0) {
-            SaveF125FDCPulse(io, event->Get<Df125FDCPulse>());
             has_f125_pulse_data = true;
+            if (m_io_config.f125_pulse) SaveF125FDCPulse(io, event->Get<Df125FDCPulse>());
         }
 
         if (JTypeInfo::demangle<Df250PulseData>() == obj_name && obj_num > 0) {
-            SaveF250FDCPulse(io, event->Get<Df250PulseData>());
             has_f250_pulse_data = true;
+            if (m_io_config.f250_pulse) SaveF250FDCPulse(io, event->Get<Df250PulseData>());
         }
 
         if (JTypeInfo::demangle<Df125WindowRawData>() == obj_name && obj_num > 0) {
-            SaveF125WindowRawData(io, event->Get<Df125WindowRawData>());
             has_f125_window_raw_data = true;
+            if (m_io_config.f125_raw) SaveF125WindowRawData(io, event->Get<Df125WindowRawData>());
         }
 
         if (JTypeInfo::demangle<Df250WindowRawData>() == obj_name && obj_num > 0) {
-            SaveF250WindowRawData(io, event->Get<Df250WindowRawData>());
             has_f250_window_raw_data = true;
+            if (m_io_config.f250_raw) SaveF250WindowRawData(io, event->Get<Df250WindowRawData>());
         }
 
         if (JTypeInfo::demangle<DGEMSRSWindowRawData>() == obj_name && obj_num > 0) {
-            SaveGEMSRSWindowRawData(io, event->Get<DGEMSRSWindowRawData>());
             has_srs_window_raw_data = true;
+            if (m_io_config.srs_raw) SaveGEMSRSWindowRawData(io, event->Get<DGEMSRSWindowRawData>());
         }
     }
 
@@ -205,16 +266,26 @@ void FlatTreeWriterProcessor::Process(const std::shared_ptr<const JEvent> &event
     // gemrecon2/fpgacon plugins simply leaves the try-blocks empty.
 
     // PLUGIN 'gemrecon2' data
-    if (has_srs_window_raw_data) {
+    if (has_srs_window_raw_data && (m_io_config.gem_clusters || m_io_config.gem_prerecon ||
+                                    m_io_config.gem_peaks || m_io_config.gem_samples)) {
         try {
-            auto clusters = event->Get<ml4fpga::gem::SFclust>();
-            SaveGEMSimpleClusters(io, clusters);
-            auto plane_decoded_data = event->GetSingle<ml4fpga::gem::PlaneDecodedData>();
-            SaveGEMDecodedData(io, plane_decoded_data);
-            auto peaks = event->Get<ml4fpga::gem::PlanePeak>();
-            SaveGEMPlanePeak(io, peaks);
-            auto samples = event->Get<ml4fpga::gem::SampleData>();
-            SaveGEMSampleData(io, samples);
+            if (m_io_config.gem_clusters) {
+                SaveGEMSimpleClusters(io, event->Get<ml4fpga::gem::SFclust>());
+            }
+            if (m_io_config.gem_prerecon) {
+                SaveGEMDecodedData(io, event->GetSingle<ml4fpga::gem::PlaneDecodedData>());
+            }
+            if (m_io_config.gem_peaks) {
+                SaveGEMPlanePeak(io, event->Get<ml4fpga::gem::PlanePeak>());
+            }
+            // Per-sample diagnostics: optionally only for the first N events
+            // (see m_gem_samples_max_events). Skipping the Get<> also avoids
+            // serializing samples we would immediately throw away.
+            if (m_io_config.gem_samples &&
+                (m_gem_samples_max_events == 0 ||
+                 m_gem_samples_seen.fetch_add(1, std::memory_order_relaxed) < m_gem_samples_max_events)) {
+                SaveGEMSampleData(io, event->Get<ml4fpga::gem::SampleData>());
+            }
         }
         catch (std::exception &ex) {
             // No GEM reconstruction in this configuration (or it failed) - debug only
@@ -223,7 +294,7 @@ void FlatTreeWriterProcessor::Process(const std::shared_ptr<const JEvent> &event
     }
 
     // PLUGIN 'fpgacon' data (plugin currently not ported - data appears when it is)
-    if (has_f125_window_raw_data) {
+    if (has_f125_window_raw_data && m_io_config.fpga) {
         try {
             auto clusters = event->Get<ml4fpga::fpgacon::F125Cluster>();
             SaveFPGAClusters(io, clusters);
@@ -454,6 +525,9 @@ void FlatTreeWriterProcessor::SaveGEMPlanePeak(flatio::FlatIoBundle& io, const s
 
 void FlatTreeWriterProcessor::SaveGEMSampleData(flatio::FlatIoBundle& io, const std::vector<const ml4fpga::gem::SampleData *> &samples) {
     for (const auto sample: samples) {
+        // ~98.8% of samples are baseline noise (measured, run 8169) - skip them
+        // when only the signal is wanted. See m_gem_samples_signal_only.
+        if (m_gem_samples_signal_only && sample->is_noise) continue;
         flatio::GemSampleData sample_save;
         sample_save.id = sample->id;
         sample_save.channel = sample->channel;
