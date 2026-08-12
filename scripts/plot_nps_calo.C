@@ -59,11 +59,11 @@ void plot_nps_calo(const char* filename,
     TH1D* h_spec[kNCh];
     for (int c = 0; c < kNCh; ++c)
         h_spec[c] = new TH1D(Form("h_spec_%d", c),
-                             Form("ch %d (row %d, col %d);integral - pedestal [ADC];pulses", c, c / 3, c % 3),
-                             100, 0, 4000);
+                             Form("ch %d (row %d, col %d);waveform #Sigma(s - baseline) [ADC];pulses", c, c / 3, c % 3),
+                             100, -300, 3000);
     TH2D h_occ("h_occ", "Occupancy;col;row", 3, -0.5, 2.5, 3, -0.5, 2.5);
     TH2D h_esh("h_esh", "Energy share;col;row", 3, -0.5, 2.5, 3, -0.5, 2.5);
-    TH1D h_sum("h_sum", "Event energy sum (all 9 blocks);#Sigma (integral - pedestal) [ADC];events", 100, 0, 10000);
+    TH1D h_sum("h_sum", "Event energy sum (all 9 blocks);#Sigma waveform energy [ADC];events", 100, -500, 8000);
     TH1D h_mult("h_mult", "Blocks over threshold per event;blocks;events", 10, -0.5, 9.5);
     TH2D h_corr("h_corr", "Channel co-firing (pulse in i AND j);channel;channel",
                 kNCh, -0.5, 8.5, kNCh, -0.5, 8.5);
@@ -80,20 +80,32 @@ void plot_nps_calo(const char* filename,
         if (!p_roc || p_roc->empty()) continue;
         double ech[kNCh] = {0};
         int fired[kNCh] = {0};
+        // Energy from the WAVEFORM, not from f250_pulse_integral: in this data
+        // nsamples_integral/nsamples_pedestal are zero, so the firmware integral
+        // cannot be pedestal-corrected and is dominated by baseline x window
+        // (~1000 counts for any block that fired). Waveform-derived energy:
+        // baseline = mean of the first 10 samples, e = sum(sample - baseline).
+        for (size_t i = 0; w_roc && i < w_roc->size(); ++i) {
+            if ((*w_roc)[i] != kRoc || (*w_slot)[i] != kSlot) continue;
+            int c = (*w_ch)[i];
+            if (c < 0 || c >= kNCh) continue;
+            uint32_t idx = (*w_sidx)[i], cnt = (*w_scnt)[i];
+            if (cnt < 20 || idx + cnt > w_samples->size()) continue;
+            double base = 0;
+            for (int s = 0; s < 10; ++s) base += (*w_samples)[idx + s];
+            base /= 10.0;
+            double e_wf = 0;
+            for (uint32_t s = 0; s < cnt; ++s) e_wf += (*w_samples)[idx + s] - base;
+            ech[c] += e_wf;
+        }
+        // fired = the firmware found a pulse there (occupancy/co-firing use this)
         for (size_t i = 0; i < p_roc->size(); ++i) {
             if ((*p_roc)[i] != kRoc || (*p_slot)[i] != kSlot) continue;
             int c = (*p_ch)[i];
-            if (c < 0 || c >= kNCh) continue;
-            // Pedestal-subtracted energy: the raw integral is dominated by the
-            // ~100 ADC baseline x NSA+NSB samples; without subtraction every
-            // fired block shows ~1000 regardless of signal.
-            double integral = (double)(*p_integral)[i];
-            if (p_ped && p_nsi && p_nsp && i < p_ped->size() && (*p_nsp)[i] > 0)
-                integral -= (double)(*p_ped)[i] * (*p_nsi)[i] / (double)(*p_nsp)[i];
-            ech[c] += integral;
-            fired[c] = 1;
-            h_spec[c]->Fill(integral);
+            if (c >= 0 && c < kNCh) fired[c] = 1;
         }
+        for (int c = 0; c < kNCh; ++c)
+            if (fired[c]) h_spec[c]->Fill(ech[c]);
         double sum = 0; int mult = 0; double cx = 0, cy = 0;
         for (int c = 0; c < kNCh; ++c) {
             sum += ech[c]; mult += fired[c];
