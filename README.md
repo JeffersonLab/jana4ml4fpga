@@ -98,6 +98,22 @@ jana4ml4fpga \
   hd_rawdata_002633_000.evio
 ```
 
+### Calorimeter beam test (FADC250, triggered mode)
+
+For a calorimeter-only setup (e.g. the NPS 3x3 PbWO4 beam test, Aug 2026) no GEM
+plugins are needed — the ADC command above is the whole job. The events tree then
+contains `f250_pulse_*` (pedestal, integral, peak, time per pulse) and
+`f250_wraw_*` (full 100-sample waveforms), addressed by
+`roc` / `slot` / `channel` (the 3x3 test: roc 65, slot 19, channels 0–8).
+Not every EVIO event carries ADC data — select events with `f250_pulse_count > 0`.
+
+Ready-made diagnostics (spectra, occupancy, channel correlations, event
+displays with waveforms):
+
+```bash
+root -l -b -q 'scripts/plot_nps_calo.C("output.root", "plots_dir")'
+```
+
 ### SRS / GEM reconstruction
 
 ```bash
