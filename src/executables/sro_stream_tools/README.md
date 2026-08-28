@@ -43,9 +43,34 @@ input thread (`dac/main/coda_sro.c`):
 ```
 
 `sro_recv` auto-detects the framing from the first 10 words of a connection:
-magic at word 9 = `cmsg`, at word 7 = `record` (no cMsg words). A leading
-2-word connection banner (magic, version) is skipped if present. A stream of
+magic at word 9 = `cmsg`, at word 7 = `record` (no cMsg words). A stream of
 bare evio banks with no headers needs an explicit `--framing=raw`.
+
+## cMsg / EMU-domain senders (CODA testers)
+
+A real CODA component (the VTP tester, `coda_roc`, ...) connects as a cMsg
+EMU-domain client. That protocol is recognized automatically by its opening
+ASCII magic `"cMsg is cool"`:
+
+```
+[ 3 words  "cMsg is cool" ]                          big-endian
+[ 5 ints   version, codaId, maxBufferBytes, nSockets, position ]
+per record:
+[ 2+ ints  {count, byteLength} ]                     big-endian
+[ buffer   8-word LE record header + payload, or a bare control bank ]
+```
+
+The handshake values are logged on connect. CODA control events
+(SYNC/PRESTART/GO/PAUSE/END, bank tags 0xffd0-0xffd4) are recognized in every
+framing mode: each one is logged, counted, and kept **out** of the output file
+by default so the file stays chain-readable (`--keep-control` writes them too).
+
+For run-control driven senders start the receiver with `--keep-listening`:
+protocol errors and end-of-run disconnects then close the connection but keep
+the receiver alive for the next transition, appending to the same file. The
+listen socket is bound before the ring buffer is allocated, so a sender that
+connects while a multi-GB buffer is still being zeroed waits in the accept
+backlog instead of being refused.
 
 ## First-words debug dump
 

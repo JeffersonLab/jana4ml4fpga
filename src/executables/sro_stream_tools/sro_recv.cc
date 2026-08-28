@@ -161,14 +161,16 @@ struct Options {
     long long max_mb;         // 0 = unlimited
     long long report_sec;
     long long dump_first;     // hexdump the first words received
-    std::string framing;      // auto | cmsg | record | raw
+    std::string framing;      // auto | cmsg | record | raw | emu
     bool keep_listening;      // accept further connections after one ends
+    bool keep_control;        // write CODA control events (prestart/go/...) to the file
     long long max_record_mb;  // desync guard
 
     Options()
         : port(6000), output("received.evio"), buffer_mb(1024), block_kb(2048),
           idle_timeout_s(0), max_events(0), max_mb(0), report_sec(2),
-          dump_first(100), framing("auto"), keep_listening(false), max_record_mb(64) {}
+          dump_first(100), framing("auto"), keep_listening(false), keep_control(false),
+          max_record_mb(64) {}
 };
 
 // Captures the first N wire bytes of a connection and prints them once in the
@@ -216,13 +218,16 @@ struct Stats {
     std::atomic<uint64_t> written_bytes;
     std::atomic<uint64_t> length_mismatches; // payload[0] != payload_words-1
     std::atomic<uint64_t> out_of_order;      // frame number <= previous
+    std::atomic<uint64_t> control_events;    // CODA prestart/go/end/... seen
+    std::atomic<uint64_t> headerless;        // emu buffers without a record header
     std::atomic<uint32_t> first_frame;
     std::atomic<uint32_t> last_frame;
     std::atomic<bool> saw_frame;
 
     Stats()
         : records(0), bytes(0), payload_bytes(0), written_blocks(0), written_bytes(0),
-          length_mismatches(0), out_of_order(0), first_frame(0), last_frame(0), saw_frame(false) {}
+          length_mismatches(0), out_of_order(0), control_events(0), headerless(0),
+          first_frame(0), last_frame(0), saw_frame(false) {}
 };
 
 static void PrintUsage(const char* prog) {
@@ -239,9 +244,12 @@ static void PrintUsage(const char* prog) {
         "  --idle-timeout N   close the connection after N seconds without data (default 0 = never)\n"
         "  --max-events N     stop after N records (default 0 = unlimited)\n"
         "  --max-mb N         stop after N MB of payload (default 0 = unlimited)\n"
-        "  --framing MODE     auto | cmsg | record | raw (default auto)\n"
+        "  --framing MODE     auto | cmsg | record | raw | emu (default auto; a cMsg/EMU\n"
+        "                     handshake like a CODA tester sends is always recognized)\n"
         "  --dump-first N     pyevio-style dump of the first N words received (default 100; 0 = off)\n"
-        "  --keep-listening   after a connection ends, accept the next one (append to the same file)\n"
+        "  --keep-control     write CODA control events (prestart/go/end) to the file too\n"
+        "                     (default: log them, keep them out of the data file)\n"
+        "  --keep-listening   after a connection ends or errors, accept the next one (append to the same file)\n"
         "  --report-sec N     stats line period in seconds (default 2)\n"
         "  --max-record-mb N  reject records larger than N MB as protocol desync (default 64)\n"
         "  --help             this text\n"
@@ -378,31 +386,41 @@ static bool ServeConnection(int fd, const Options& opt, Stats* stats, RecordRing
     rc = RecvExact(fd, peek + 1, 9 * sizeof(uint32_t), opt.idle_timeout_s, &capture);
     if (rc != 1) { std::fprintf(stderr, "ERROR: connection ended inside the first 10 words\n"); return rc == 0; }
 
-    if (peek[0] == kMagic && peek[1] != kMagic) {
-        // 2-word connection banner (magic, version) - the commented-out
-        // "emuData" path in coda_sro.c. Shift it away and keep detecting.
-        std::printf("sro_recv: connection banner detected (version word 0x%08x)\n", peek[1]);
-        std::memmove(peek, peek + 2, 8 * sizeof(uint32_t));
-        rc = RecvExact(fd, peek + 8, 2 * sizeof(uint32_t), opt.idle_timeout_s, &capture);
-        if (rc != 1) { std::fprintf(stderr, "ERROR: stream ended right after the banner\n"); return rc == 0; }
+    // cMsg/EMU-domain client (e.g. a CODA component tester): the connection
+    // opens with ASCII "cMsg is cool" + 5 big-endian ints, and every record is
+    // framed by big-endian {count, byteLength} ints. Detect it by the magic
+    // string regardless of the requested mode - the banner is unambiguous.
+    bool emu_handshake = (ntohl(peek[0]) == kCmsgMagic1 && ntohl(peek[1]) == kCmsgMagic2 && ntohl(peek[2]) == kCmsgMagic3);
+    if (emu_handshake) {
+        std::printf("sro_recv: cMsg/EMU handshake: version=%u codaId=%u maxBuffer=%u bytes nSockets=%u position=%u\n",
+                    ntohl(peek[3]), ntohl(peek[4]), ntohl(peek[5]), ntohl(peek[6]), ntohl(peek[7]));
+        if (ntohl(peek[6]) > 1) {
+            std::printf("sro_recv: WARNING - sender announces %u parallel sockets; this receiver handles one\n", ntohl(peek[6]));
+        }
+        if (mode != "auto" && mode != "emu") {
+            std::printf("sro_recv: overriding --framing=%s - the handshake identifies the sender as cMsg/EMU\n", mode.c_str());
+        }
+        mode = "emu";
+        // peek words 8..9 are the first record's framing pair {count, first int}
     }
     if (mode == "auto") {
         if (peek[9] == kMagic) mode = "cmsg";
         else if (peek[7] == kMagic) mode = "record";
         else {
-            std::fprintf(stderr, "ERROR: cannot auto-detect framing - no magic 0xc0da0100 at word 7 or 9.\n");
+            std::fprintf(stderr, "ERROR: cannot auto-detect framing - no cMsg/EMU handshake and no magic 0xc0da0100 at word 7 or 9.\n");
             if (opt.dump_first <= 0) DumpWords(peek, 10, "First words received"); // WireCapture prints the full dump otherwise
             std::fprintf(stderr, "If this is a bare evio-bank stream, rerun with --framing=raw.\n");
-            return false;
+            return opt.keep_listening;
         }
     }
-    if (peek[7] == kMagicByteSwapped || peek[9] == kMagicByteSwapped) {
+    if (mode != "emu" && (peek[7] == kMagicByteSwapped || peek[9] == kMagicByteSwapped)) {
         std::fprintf(stderr, "ERROR: byte-swapped magic on the wire - big-endian sender is not supported\n");
-        return false;
+        return opt.keep_listening;
     }
     std::printf("sro_recv: framing mode '%s'\n", mode.c_str());
 
     std::vector<uint32_t> payload;
+    std::vector<uint32_t> wire_buffer; // emu mode: one framed buffer as it came off the wire
     payload.reserve(1 << 16);
     const uint64_t max_record_words = static_cast<uint64_t>(opt.max_record_mb) * 1024 * 1024 / 4;
     const size_t frame_words = (mode == "cmsg") ? 2 : 0;
@@ -425,19 +443,78 @@ static bool ServeConnection(int fd, const Options& opt, Stats* stats, RecordRing
                 rc = RecvExact(fd, &w0, sizeof(w0), opt.idle_timeout_s, &capture);
                 if (rc == 0) { std::printf("sro_recv: sender closed the connection\n"); return true; }
                 if (rc == -2) { std::printf("sro_recv: idle timeout (%lld s) - closing connection\n", opt.idle_timeout_s); return true; }
-                if (rc != 1) return false;
+                if (rc != 1) return !g_stop && opt.keep_listening;
             }
             payload_words = w0 + 1; // w0 is the exclusive bank length
             if (payload_words < 2 || payload_words > max_record_words ||
                 (first_record && payload_words < 1 + preread_count)) {
                 std::fprintf(stderr, "ERROR: implausible raw bank length %u words - protocol desync\n", payload_words);
-                return false;
+                return opt.keep_listening;
             }
             payload.resize(payload_words);
             payload[0] = w0;
             if (preread_count > 0) std::memcpy(&payload[1], preread, preread_count * sizeof(uint32_t));
             rc = RecvExact(fd, &payload[1 + preread_count], (payload_words - 1 - preread_count) * sizeof(uint32_t), opt.idle_timeout_s, &capture);
-            if (rc != 1) { std::fprintf(stderr, "ERROR: stream ended mid-record\n"); return false; }
+            if (rc != 1) { std::fprintf(stderr, "ERROR: stream ended mid-record\n"); return !g_stop && opt.keep_listening; }
+        } else if (mode == "emu") {
+            // Big-endian cMsg framing: {count, int...}; the last int is the
+            // byte length of the following buffer (observed on the wire:
+            // count=1, so the pair is {1, byteLength}).
+            uint32_t framing_count;
+            uint32_t last_int_be;
+            const uint32_t* buffer_preread = NULL;
+            size_t buffer_preread_words = 0;
+            if (first_record) {
+                if (emu_handshake) {
+                    framing_count = ntohl(peek[8]);
+                    last_int_be = peek[9];
+                } else { // --framing=emu forced and no handshake: peek starts at the framing pair
+                    framing_count = ntohl(peek[0]);
+                    last_int_be = peek[1];
+                    buffer_preread = &peek[2];
+                    buffer_preread_words = 8;
+                }
+            } else {
+                uint32_t count_be;
+                rc = RecvExact(fd, &count_be, sizeof(count_be), opt.idle_timeout_s, &capture);
+                if (rc == 0) { std::printf("sro_recv: sender closed the connection\n"); return true; }
+                if (rc == -2) { std::printf("sro_recv: idle timeout (%lld s) - closing connection\n", opt.idle_timeout_s); return true; }
+                if (rc != 1) return !g_stop && opt.keep_listening;
+                framing_count = ntohl(count_be);
+                rc = RecvExact(fd, &last_int_be, sizeof(last_int_be), opt.idle_timeout_s, &capture);
+                if (rc != 1) { std::fprintf(stderr, "ERROR: stream ended inside cMsg framing\n"); return opt.keep_listening; }
+            }
+            if (framing_count < 1 || framing_count > 16) {
+                std::fprintf(stderr, "ERROR: implausible cMsg framing count %u - protocol desync\n", framing_count);
+                return opt.keep_listening;
+            }
+            for (uint32_t extra = 1; extra < framing_count; extra++) { // longer framing: keep only the last int
+                rc = RecvExact(fd, &last_int_be, sizeof(last_int_be), opt.idle_timeout_s, &capture);
+                if (rc != 1) { std::fprintf(stderr, "ERROR: stream ended inside cMsg framing\n"); return opt.keep_listening; }
+            }
+            uint32_t buffer_bytes = ntohl(last_int_be);
+            if (buffer_bytes < 8 || buffer_bytes % 4 != 0 || buffer_bytes / 4 > max_record_words) {
+                std::fprintf(stderr, "ERROR: implausible cMsg buffer length %u bytes - protocol desync\n", buffer_bytes);
+                return opt.keep_listening;
+            }
+            uint32_t buffer_words = buffer_bytes / 4;
+            wire_buffer.resize(buffer_words);
+            size_t have = std::min<size_t>(buffer_preread_words, buffer_words);
+            if (have > 0) std::memcpy(wire_buffer.data(), buffer_preread, have * sizeof(uint32_t));
+            rc = RecvExact(fd, wire_buffer.data() + have, (buffer_words - have) * sizeof(uint32_t), opt.idle_timeout_s, &capture);
+            if (rc != 1) { std::fprintf(stderr, "ERROR: stream ended mid-record\n"); return !g_stop && opt.keep_listening; }
+
+            // Strip the little-endian record header when present; otherwise
+            // keep the whole buffer as an opaque payload.
+            if (buffer_words > kRecordHeaderWords && wire_buffer[7] == kMagic) {
+                payload.assign(wire_buffer.begin() + kRecordHeaderWords, wire_buffer.end());
+            } else {
+                payload = wire_buffer;
+                if (stats->headerless++ == 0) {
+                    std::printf("sro_recv: note - cMsg buffer without a record header (stored as-is; counted)\n");
+                }
+            }
+            payload_words = static_cast<uint32_t>(payload.size());
         } else {
             uint32_t header_words[kRecordHeaderWords];
             if (first_record) {
@@ -455,26 +532,40 @@ static bool ServeConnection(int fd, const Options& opt, Stats* stats, RecordRing
                 }
                 if (rc == 0) { std::printf("sro_recv: sender closed the connection\n"); return true; }
                 if (rc == -2) { std::printf("sro_recv: idle timeout (%lld s) - closing connection\n", opt.idle_timeout_s); return true; }
-                if (rc != 1) return false;
+                if (rc != 1) return !g_stop && opt.keep_listening;
                 if (frame_words > 0) {
                     rc = RecvExact(fd, header_words, sizeof(header_words), opt.idle_timeout_s, &capture);
-                    if (rc != 1) { std::fprintf(stderr, "ERROR: stream ended between framing and header\n"); return false; }
+                    if (rc != 1) { std::fprintf(stderr, "ERROR: stream ended between framing and header\n"); return opt.keep_listening; }
                 }
             }
 
             if (header_words[7] != kMagic) {
                 std::fprintf(stderr, "ERROR: record header magic mismatch (got 0x%08x) - protocol desync\n", header_words[7]);
                 DumpWords(header_words, kRecordHeaderWords, "Offending header");
-                return false;
+                return opt.keep_listening;
             }
             if (header_words[0] <= kRecordHeaderWords || header_words[0] > max_record_words) {
                 std::fprintf(stderr, "ERROR: implausible record total_length %u words\n", header_words[0]);
-                return false;
+                return opt.keep_listening;
             }
             payload_words = header_words[0] - kRecordHeaderWords;
-            if (!ReadPayload(fd, opt, payload, payload_words, preread, preread_count, &capture)) return false;
+            if (!ReadPayload(fd, opt, payload, payload_words, preread, preread_count, &capture)) return !g_stop && opt.keep_listening;
         }
         first_record = false;
+
+        // CODA control events (sync/prestart/go/pause/end) mark run
+        // transitions, not detector data. Log them; keep them out of the data
+        // file unless --keep-control (a 5-word control bank is not a frame
+        // set and would confuse the offline chain).
+        uint32_t bank_tag = (payload_words >= 2) ? (payload[1] >> 16) : 0;
+        const char* control_name = ControlEventName(bank_tag);
+        if (control_name != NULL) {
+            stats->control_events++;
+            std::printf("sro_recv: control event %s (tag 0x%04x)%s\n", control_name, bank_tag,
+                        opt.keep_control ? "" : " - not written to file (--keep-control to keep)");
+            std::fflush(stdout);
+            if (!opt.keep_control) continue;
+        }
 
         // Cross-check payload[0]; count mismatches but keep the data.
         if (payload_words >= 1 && payload[0] != payload_words - 1) {
@@ -536,19 +627,43 @@ int main(int argc, char** argv) {
         else if (args.Match("--report-sec", value)) opt.report_sec = ParseLongOrDie(value, "--report-sec");
         else if (args.Match("--max-record-mb", value)) opt.max_record_mb = ParseLongOrDie(value, "--max-record-mb");
         else if (args.MatchFlag("--keep-listening")) opt.keep_listening = true;
+        else if (args.MatchFlag("--keep-control")) opt.keep_control = true;
         else {
             std::fprintf(stderr, "ERROR: unknown argument %s (see --help)\n", argv[args.index]);
             return 1;
         }
     }
-    if (opt.framing != "auto" && opt.framing != "cmsg" && opt.framing != "record" && opt.framing != "raw") {
-        std::fprintf(stderr, "ERROR: --framing must be auto|cmsg|record|raw\n");
+    if (opt.framing != "auto" && opt.framing != "cmsg" && opt.framing != "record" && opt.framing != "raw" && opt.framing != "emu") {
+        std::fprintf(stderr, "ERROR: --framing must be auto|cmsg|record|raw|emu\n");
         return 1;
     }
     if (opt.report_sec <= 0) opt.report_sec = 2;
 
     std::signal(SIGINT, OnSigInt);
     std::signal(SIGPIPE, SIG_IGN);
+
+    // Bind and listen FIRST: allocating a multi-GB ring buffer takes seconds,
+    // and a sender (a CODA component on a run transition) that connects in
+    // that window must land in the accept backlog, not get "connection refused".
+    int listen_fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    int reuse = 1;
+    ::setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    struct sockaddr_in addr;
+    std::memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons(static_cast<uint16_t>(opt.port));
+    if (::bind(listen_fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
+        std::fprintf(stderr, "ERROR: cannot bind port %d (%s)\n", opt.port, std::strerror(errno));
+        return 1;
+    }
+    if (::listen(listen_fd, 4) < 0) {
+        std::fprintf(stderr, "ERROR: listen failed (%s)\n", std::strerror(errno));
+        return 1;
+    }
+    std::printf("sro_recv: listening on port %d, output %s, buffer %lld MB, block target %lld kB\n",
+                opt.port, opt.output.c_str(), opt.buffer_mb, opt.block_kb);
+    std::fflush(stdout);
 
     FILE* out_file = std::fopen(opt.output.c_str(), "wb");
     if (out_file == NULL) {
@@ -587,26 +702,6 @@ int main(int argc, char** argv) {
             last_time = now;
         }
     });
-
-    // Listen socket
-    int listen_fd = ::socket(AF_INET, SOCK_STREAM, 0);
-    int reuse = 1;
-    ::setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
-    struct sockaddr_in addr;
-    std::memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    addr.sin_port = htons(static_cast<uint16_t>(opt.port));
-    if (::bind(listen_fd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
-        std::fprintf(stderr, "ERROR: cannot bind port %d (%s)\n", opt.port, std::strerror(errno));
-        return 1;
-    }
-    if (::listen(listen_fd, 1) < 0) {
-        std::fprintf(stderr, "ERROR: listen failed (%s)\n", std::strerror(errno));
-        return 1;
-    }
-    std::printf("sro_recv: listening on port %d, output %s, buffer %lld MB, block target %lld kB\n",
-                opt.port, opt.output.c_str(), opt.buffer_mb, opt.block_kb);
 
     bool accept_more = true;
     while (accept_more && !g_stop) {
@@ -650,5 +745,11 @@ int main(int argc, char** argv) {
                 stats.first_frame.load(), stats.last_frame.load(),
                 (unsigned long long)stats.out_of_order.load(),
                 (unsigned long long)stats.length_mismatches.load());
+    if (stats.control_events.load() > 0 || stats.headerless.load() > 0) {
+        std::printf("sro_recv: control events: %llu (%s), headerless cMsg buffers: %llu\n",
+                    (unsigned long long)stats.control_events.load(),
+                    opt.keep_control ? "written" : "not written",
+                    (unsigned long long)stats.headerless.load());
+    }
     return 0;
 }

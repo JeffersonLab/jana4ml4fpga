@@ -43,6 +43,29 @@ const uint32_t kMagic = 0xC0DA0100u;
 const uint32_t kMagicByteSwapped = 0x0001DAC0u;
 const uint32_t kRecordHeaderWords = 8;
 
+// cMsg / EMU-domain handshake: a real CODA cMsg client starts the connection
+// with the ASCII magic "cMsg is cool" (3 words, network byte order) followed
+// by 5 big-endian ints {version, codaId, maxBufferBytes, nSockets, position}.
+// Each subsequent send is framed by big-endian ints {count, byteLength} in
+// front of the (little-endian) record buffer.
+const uint32_t kCmsgMagic1 = 0x634D7367u; // "cMsg"
+const uint32_t kCmsgMagic2 = 0x20697320u; // " is "
+const uint32_t kCmsgMagic3 = 0x636F6F6Cu; // "cool"
+const uint32_t kEmuConnectHeaderWords = 8; // 3 magic + version + codaId + maxBuf + nSockets + position
+
+// CODA control event tags (bank tag in the first payload words). These mark
+// run transitions, not detector data.
+inline const char* ControlEventName(uint32_t tag) {
+    switch (tag) {
+        case 0xFFD0: return "SYNC";
+        case 0xFFD1: return "PRESTART";
+        case 0xFFD2: return "GO";
+        case 0xFFD3: return "PAUSE";
+        case 0xFFD4: return "END";
+        default: return NULL;
+    }
+}
+
 // Matches EVIO_Record_Header_t in dac/dac.s/sroLib.h (packed, 8 u32 words).
 struct RecordHeader {
     uint32_t total_length;   // inclusive record length in words (header + payload)
